@@ -60,6 +60,20 @@ Reverse-proxy capabilities at a glance (✓ supported · ✗ not supported · �
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) and `/v1/models` behave identically for every platform; model mapping, the global priority queue, 429 fallback, egress proxying, outbound fingerprint redaction and request reporting apply to all platforms alike.
 
+### 🔀 The direct channel: `/v1/systemone` (vendor-specific, **not** a chat protocol)
+
+The three above are **generic chat protocols** — the gateway translates between them, so any vendor's models can be called through any one of them. There is also `/v1/systemone`, a **raw JSON pass-through** channel for **OpenCode Zen's SystemOne (Jev) structured-decision model**:
+
+- Jev **produces no text** and has no `messages` / `tools` — it evaluates a `state` against typed questions (`noul` / `choice` / `score`) and returns values and probabilities, so it fits none of the chat protocols and needs a channel of its own. It does **no protocol translation**: the request body goes out as-is and the reply comes back as-is.
+- To use it: on **Add account → Preset APIs**, pick **`OpenCode Zen · SystemOne (Jev)`** (the model `jev-1.13-free` is registered with the card; the key is optional — fill in your OpenCode Console key if the free model is refused), then call it with SystemOne's own schema:
+
+```bash
+curl http://127.0.0.1:3065/v1/systemone -H "Content-Type: application/json" \
+  -d '{"model":"jev-1.13-free","state":"…","questions":{"is_urgent":{"type":"noul","instructions":"…"}}}'
+```
+
+- It shares the same account routing, rate-limit cooldown and request reports as the chat path; the in-app **Docs** page also lists this address with a copy button.
+
 > **This project is for learning and discussion only.** It reuses your own accounts' login state in the shape of a non-official client, which may violate the upstream services' terms; risks (including rate limiting or account bans) are your own. Commercial use and circumventing billing are prohibited. See the [Usage Notice](#-usage-notice) and [LICENSE](./LICENSE).
 >
 > This is a personal, local-purpose proxy tool, unaffiliated with any upstream vendor or their official products (the list is in the [Usage Notice](#-usage-notice)); interface shapes come from observing the clients' traffic, and upstream may change at any time.

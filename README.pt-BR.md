@@ -60,6 +60,20 @@ Panorama dos recursos de proxy reverso por plataforma (✓ suportado · ✗ não
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) e `/v1/models` funcionam igual para todas as plataformas; mapeamento de modelos, fila global de prioridade, fallback em 429, proxy de saída, mascaramento de impressão digital de saída e relatórios de requisições valem para todas as plataformas.
 
+### 🔀 Canal direto: `/v1/systemone` (específico do fornecedor, **não** é um protocolo de conversa)
+
+Os três acima são **protocolos de conversa genéricos** — o gateway traduz entre eles, então os modelos de qualquer fornecedor podem ser chamados por qualquer um deles. Há também `/v1/systemone`, um canal de **repasse JSON bruto** para o **modelo de decisão estruturada SystemOne (Jev) do OpenCode Zen**:
+
+- O Jev **não produz texto** e não tem `messages` / `tools` — ele avalia um `state` contra perguntas tipadas (`noul` / `choice` / `score`) e devolve valores e probabilidades, então não cabe em nenhum protocolo de conversa. Ele **não faz tradução de protocolo**: o corpo sai como está e a resposta volta como está.
+- Como usar: em **Adicionar conta → APIs predefinidas**, escolha **`OpenCode Zen · SystemOne (Jev)`** para criar este provedor (o modelo `jev-1.13-free` já vem registrado com o cartão; a Key é opcional — preencha a sua Key do OpenCode Console se o modelo gratuito for recusado) e chame com o schema do próprio SystemOne:
+
+```bash
+curl http://127.0.0.1:3065/v1/systemone -H "Content-Type: application/json" \
+  -d '{"model":"jev-1.13-free","state":"…","questions":{"is_urgent":{"type":"noul","instructions":"…"}}}'
+```
+
+- Ele compartilha o mesmo roteamento de contas, cooldown de limite e relatórios de requisições do caminho de conversa; a página **Documentação** do app também lista este endereço com botão de copiar.
+
 > **Este projeto é apenas para aprendizado e troca de conhecimento.** Ele reutiliza o estado de login das suas contas na forma de um cliente não oficial, o que pode violar os termos dos serviços upstream; os riscos (inclusive banimento da conta) são seus. Uso comercial e contorno de cobrança são proibidos. Veja o [Aviso de uso](#-aviso-de-uso) e a [LICENSE](./LICENSE).
 >
 > Este é um projeto pessoal de ferramenta de proxy local, sem vínculo com qualquer fornecedor upstream ou seus produtos oficiais (a lista está no [Aviso de uso](#-aviso-de-uso)); os formatos de interface vêm da observação do tráfego dos clientes, e o upstream pode mudar a qualquer momento.

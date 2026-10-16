@@ -2,6 +2,7 @@
   " 或 ": " ou ",
   "Base URL 填进客户端的「API 地址 / Base URL」栏；对话协议按客户端支持的类型三选一（Chat Completions / Responses / Anthropic Messages），三者共用同一套模型与账号池，可随时切换；鉴权用「网关 Key」页里任一启用 Key。": "Preencha o Base URL no campo “Endereço da API / Base URL” do cliente; escolha um dos três protocolos de conversa conforme o tipo compatível com o cliente (Chat Completions / Responses / Anthropic Messages) — os três compartilham o mesmo conjunto de modelos e o mesmo pool de contas e podem ser alternados a qualquer momento; para autenticação, use qualquer Key habilitada na página “Chave do gateway”.",
   "Claude Code / Anthropic SDK（token 计数：/v1/messages/count_tokens）": "Claude Code / Anthropic SDK (contagem de tokens: /v1/messages/count_tokens)",
+  "Jev 结构化决策模型（不产出文本、没有 messages/tools）：请求体 model/state/questions 原样 JSON 直通。先到「添加账号 → 预置 API」选「OpenCode Zen · SystemOne (Jev)」建好这一家（模型已随卡登记）": "O modelo de decisão estruturada Jev (não produz texto e não tem messages/tools): o corpo (model/state/questions) é repassado como JSON bruto. Primeiro crie o provedor em Adicionar conta → APIs predefinidas → `OpenCode Zen · SystemOne (Jev)` (o modelo já vem registrado com o cartão).",
   "OpenAI 新协议（Codex、新版 SDK）": "Novo protocolo da OpenAI (Codex, SDKs mais recentes)",
   "。一把启用的 Key 都没有时不鉴权（默认网关只监听 127.0.0.1；在设置页开启「局域网访问」后监听所有网卡，鉴权与安全闸门随之启用）。": ". Se nenhuma Key estiver habilitada, não há autenticação (por padrão, o gateway escuta apenas 127.0.0.1; após habilitar “Acesso LAN” na página de configurações, ele passa a escutar todas as interfaces de rede, e a autenticação e as barreiras de segurança entram em vigor).",
   "启用": "habilitada",
@@ -14,5 +15,6 @@
   "模型列表": "Lista de modelos",
   "模型清单": "Catálogo de modelos",
   "的 Key：请求带 ": " da página “Chave do gateway”; as requisições enviam ",
+  "直通通道（厂商专属，不是对话协议）": "Canal direto (específico do fornecedor, não é um protocolo de conversa)",
   "鉴权用「网关 Key」页里任一": "Para autenticação, use qualquer Key "
 }

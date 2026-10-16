@@ -60,6 +60,20 @@
 
 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（含 `count_tokens`）与 `/v1/models` 对所有平台一视同仁；模型映射、全局优先级队列、429 降级、出网代理、出站指纹脱敏与请求报表同样全平台通用。
 
+### 🔀 直通通道：`/v1/systemone`（厂商专属，**不是**对话协议）
+
+上面那三条是**通用对话协议** —— 网关在它们之间互相翻译，所以任何一家的模型都能从任意一条调用。另有一条 `/v1/systemone` 是**原样 JSON 直通**通道，专供 **OpenCode Zen 的 SystemOne（Jev）结构化决策模型**：
+
+- Jev **不产出文本**，也没有 `messages` / `tools` —— 它按 `state` + 若干 typed 问题（`noul` / `choice` / `score`）返回取值与概率，因此塞不进任何一条对话协议，只能单开一条；它**不做任何协议翻译**，请求体原样出去、响应原样回来。
+- 用法：在「添加账号 → 预置 API」选 **`OpenCode Zen · SystemOne (Jev)`** 建好这一家（模型 `jev-1.13-free` 已随卡登记；Key 可不填，免费模型被上游拒时再填 OpenCode Console 的 Key），然后按 SystemOne 自己的 schema 调：
+
+```bash
+curl http://127.0.0.1:3065/v1/systemone -H "Content-Type: application/json" \
+  -d '{"model":"jev-1.13-free","state":"…","questions":{"is_urgent":{"type":"noul","instructions":"…"}}}'
+```
+
+- 它与对话链路共用同一套账号选路、限额冷却与请求报表；面板「文档」页里也有这条地址，可一键复制。
+
 > **本项目仅供学习与交流使用。** 它以非官方客户端形态复用你自己账号的登录态，可能不符合上游服务的使用条款，风险（含账号被风控、封禁）自负；禁止商用或绕过计费。详见[使用声明](#-使用声明)与 [LICENSE](./LICENSE)。
 >
 > 本项目与各上游厂商及其官方产品均无关（名单见[使用声明](#-使用声明)）；接口形态来自对各家客户端通信的观察，上游随时可能调整。

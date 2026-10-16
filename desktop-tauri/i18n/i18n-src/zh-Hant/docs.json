@@ -2,6 +2,7 @@
   " 或 ": "",
   "Base URL 填进客户端的「API 地址 / Base URL」栏；对话协议按客户端支持的类型三选一（Chat Completions / Responses / Anthropic Messages），三者共用同一套模型与账号池，可随时切换；鉴权用「网关 Key」页里任一启用 Key。": "",
   "Claude Code / Anthropic SDK（token 计数：/v1/messages/count_tokens）": "",
+  "Jev 结构化决策模型（不产出文本、没有 messages/tools）：请求体 model/state/questions 原样 JSON 直通。先到「添加账号 → 预置 API」选「OpenCode Zen · SystemOne (Jev)」建好这一家（模型已随卡登记）": "",
   "OpenAI 新协议（Codex、新版 SDK）": "",
   "。一把启用的 Key 都没有时不鉴权（默认网关只监听 127.0.0.1；在设置页开启「局域网访问」后监听所有网卡，鉴权与安全闸门随之启用）。": "",
   "启用": "",
@@ -14,5 +15,6 @@
   "模型列表": "",
   "模型清单": "",
   "的 Key：请求带 ": "",
+  "直通通道（厂商专属，不是对话协议）": "",
   "鉴权用「网关 Key」页里任一": ""
 }

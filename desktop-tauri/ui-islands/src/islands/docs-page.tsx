@@ -25,13 +25,14 @@ import { t } from '../i18n'
  * 接得住 React 插入的节点）—— 与设置页 / 定时任务页同一处理，不换成 Tooltip 是刻意的：
  * 换要把长文包一层组件，观感与行为却完全一样。
  *
- * ── 地址不是本岛的数据：五个 id 必须原样渲染、且必须稳定 ────────────
- * 五条地址的文本由**另一个岛**写进来：port-panel.tsx 的 paintGatewayAddress 用
+ * ── 地址不是本岛的数据：六个 id 必须原样渲染、且必须稳定 ────────────
+ * 六条地址的文本由**另一个岛**写进来：port-panel.tsx 的 paintGatewayAddress 用
  * `getElementById(id).textContent = ...` 就地覆盖（它每次 sync / render 都重写一遍，
  * 地址随真实端口变化）。所以：
- *   · `id` 一字不改（api-base / api-chat / api-responses / api-messages / api-models）
+ *   · `id` 一字不改（api-base / api-chat / api-responses / api-messages / api-models /
+ *     api-systemone）
  *     —— 少了任何一个，那一行地址永远是占位的「—」；
- *   · 这五个元素的**文本不进 React 的 state**，本岛只渲染一次静态骨架，之后不重渲染；
+ *   · 这六个元素的**文本不进 React 的 state**，本岛只渲染一次静态骨架，之后不重渲染；
  *     即便将来有人给它加了会变的 key 或条件渲染把它换掉，React 重建元素后 port-panel
  *     要等下一次 sync（最多 20 秒的轮询）才会补写 —— 用户会看到地址闪没；
  *   · 占位的「—」是**首屏**文案（静态 DOM 里就有）：port-panel 还没写进来时不留空白。
@@ -115,6 +116,14 @@ function DocsPage() {
 
         <EndpointRow id='api-models' name={t('模型列表')}
           note={t('客户端自动拉取可用模型；不受鉴权限制，配 Key 之前就能拉')} />
+
+        {/* 直通通道与上面三条**对话协议**是两回事：它不做协议翻译，请求体原样出去、
+            响应原样回来（所以单独一组，免得用户以为「三选一」里还有它）。
+            它只服务厂商专属的非对话模型，当前唯一用户是 OpenCode Zen 的 SystemOne(Jev) */}
+        <div className='ep-group'>{t('直通通道（厂商专属，不是对话协议）')}</div>
+
+        <EndpointRow id='api-systemone' name='OpenCode Zen · SystemOne'
+          note={t('Jev 结构化决策模型（不产出文本、没有 messages/tools）：请求体 model/state/questions 原样 JSON 直通。先到「添加账号 → 预置 API」选「OpenCode Zen · SystemOne (Jev)」建好这一家（模型已随卡登记）')} />
       </div>
       {/* 脚注逐字照抄静态 DOM：空格与标点都是原文的一部分，所以每段文本各写一个表达式 ——
           JSX 会把「跨行的文本」折成一个空格，中英混排里那一格空隙很显眼。

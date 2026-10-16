@@ -249,6 +249,8 @@ function paintGatewayAddress(base: string): void {
   paint('api-responses', `POST ${base}/v1/responses`)
   paint('api-messages', `POST ${base}/v1/messages`)
   paint('api-models', `GET ${base}/v1/models`)
+  // 直通通道（非对话协议）：OpenCode Zen 的 SystemOne（Jev）决策模型原样 JSON 直通
+  paint('api-systemone', `POST ${base}/v1/systemone`)
 }
 
 /** 防止并发重复请求（轮询与切页可能同时触发） */
