@@ -715,6 +715,19 @@ pub fn create(payload: &Value) -> Result<Value, String> {
             .unwrap_or(""),
     )?;
     let id = new_provider_id()?;
+    // 预置卡可以带一份**默认登记的模型清单**：个别上游没有 `/models` 可取
+    // （OpenCode Zen 的 SystemOne 端点只有 `/systemone`），用户若还要手工去
+    // 「模型」页登记一次才用得上，那就不是「选了卡就能用」。带上的走与
+    // `set_models` 同一套校验（`validate_model_entries`），非法值报错而不是丢条目。
+    let models = match object.get("models") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(value) => {
+            let raw = value
+                .as_array()
+                .ok_or_else(|| "models 必须是数组".to_string())?;
+            validate_model_entries(raw)?
+        }
+    };
     let item = json!({
         "id": id,
         "name": name,
@@ -722,7 +735,7 @@ pub fn create(payload: &Value) -> Result<Value, String> {
         "baseUrl": base_url,
         "enabled": true,
         "createdAt": logging::now_ms(),
-        "models": [],
+        "models": models,
         "mappings": [],
         // per-provider 特判字段（预置目录带来的上游修正），见 validate_* 的说明
         "urlSuffix": validate_url_suffix(object.get("urlSuffix"))?,

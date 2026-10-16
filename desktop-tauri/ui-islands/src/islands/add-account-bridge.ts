@@ -63,6 +63,12 @@ export type PresetRecord = {
    * `custom_providers::apply_model_filter`）。
    */
   modelFilter?: string
+  /**
+   * 预置卡随创建直接登记的模型清单（没有 `/models` 可取的上游，如 OpenCode Zen
+   * 的 SystemOne 端点）：后端 `custom_providers::create` 按 `set_models` 同一套
+   * 校验落盘，免得用户还要到「模型」页手工登记一次才用得上。
+   */
+  models?: { id: string; enabled?: boolean }[]
   /** 该家账号的默认取值（表单初始勾选态）：noAuth = 预勾「该上游无需鉴权」 */
   account?: { noAuth?: boolean }
   /** 余额查询方案：创建时随记录写入 `balanceScheme`（见 `CustomProviderRecord`） */

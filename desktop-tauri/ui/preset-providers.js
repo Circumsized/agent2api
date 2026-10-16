@@ -228,7 +228,10 @@
       // /models，清单本来就取不到（模型要在「模型」页手动登记）。
       key: 'opencode-zen-systemone', name: 'OpenCode Zen · SystemOne (Jev)', icon: 'opencode-zen.png',
       protocol: 'systemone', baseUrl: 'https://opencode.ai/inference/systemone/v1',
-      hint: wbI18n.t('SystemOne 是 OpenCode Zen 的 Jev 结构化决策端点（不是对话模型；请求体为 model/state/questions 的 JSON 直通）。Key 可不填（免费模型被上游拒时再填 OpenCode Console 的 Key）；该端点没有 /models，需到「模型」页手动登记模型名（如 jev-1.13-free）'),
+      hint: wbI18n.t('SystemOne 是 OpenCode Zen 的 Jev 结构化决策端点（不是对话模型；请求体为 model/state/questions 的 JSON 直通，调用 /v1/systemone）。Key 可不填（免费模型被上游拒时再填 OpenCode Console 的 Key）。模型 jev-1.13-free 已随卡预登记'),
+      // 该端点没有 `/models` 可取，所以预置卡直接把模型带进记录（create 默认登记，
+      // 免得用户还要到「模型」页手工加一次才用得上；见 custom_providers::create）
+      models: [{ id: 'jev-1.13-free', enabled: true }],
       account: { noAuth: true },
     },
     {
