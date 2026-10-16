@@ -39,7 +39,7 @@
 //!   - 开了客户端伪装且没有 key → 用上游认的匿名凭证 `public`
 //!     （OpenCode 免费档：不填 Key 也能跑，这就是那条路）。
 //!
-//! ── 协议分派（三种协议的分派点）─────────────────────────────
+//! ── 协议分派（四种协议的分派点）─────────────────────────────
 //!   - chat_completions：上游就是 chat 形态，**原样透传**（见「透传语义」）；
 //!   - responses / anthropic：上游说另一种协议，走**翻译链** —— chat 体先
 //!     过 [`rewrite_body`]（模型名 + 思考等级改写仍落在 chat 体上），再由
@@ -47,8 +47,35 @@
 //!     上游请求；上游的 SSE 事件流先过 [`ProtocolTranslateStream`] 折成标准
 //!     chat SSE，之后流式照进 `ForwardStream`（reasoning 合并 / usage 提取 /
 //!     model 回写三层不变），非流式照进聚合器。编排层零改动。
-//! 分派点就是 [`forward`] 里 `protocol` 的 match：上游恒以 `stream:true`
-//! 被请求的条策略对三种协议一体适用（翻译出的请求体上再覆写一次）。
+//!   - systemone：**不走翻译链、也不走 chat 透传**，见下面的专节。
+//! 分派点就是 [`forward`] 里 `protocol` 的 match：前三者（chat 与翻译链）适用
+//! 「上游恒以 `stream:true` 被请求」这条策略；systemone 有自己的出口。
+//!
+//! ── SystemOne 分支（OpenCode Zen 的 Jev 决策模型）──────────────
+//! 它是第四种自定义协议 [`PROTOCOL_SYSTEMONE`]，**不是对话模型**：
+//!   - 端点不同：`POST {baseUrl}/systemone`（providers 记录的 baseUrl 为
+//!     `https://opencode.ai/inference/systemone/v1`），**不是** `/chat/completions`；
+//!   - 请求体不同：`{"model":"…","state":"…","questions":{…}}` —— 没有
+//!     `messages`，因此 **绝不能**过 chat 的翻译链，也**绝不能**套 OpenCode
+//!     免费档的「智能体形态」伪装（那会补 `bash` / `read` 桩工具，直接把决策体
+//!     改烂）。本分支只做一件事改写：模型名（映射 alias → 上游真名，复用
+//!     [`custom_providers::wire_model_for`]，与 chat 路径同一函数），其余字节
+//!     原样出去；
+//!   - 响应是 JSON（每题的取值 / 概率），**不是 SSE**，所以恒非流式：2xx 直接把
+//!     上游 JSON 打包成 [`ForwardOutcome::Completion`]，非 2xx 走与 chat 路径
+//!     同一套错误分类（[`classify_custom_error`]，401/429/5xx 的编排分类原样生效）。
+//!
+//! 鉴权沿用 chat 路径的三档：账号有 apiKey → `Authorization: Bearer <key>`；
+//! 空 key 且声明了客户端伪装（`clientEmulation == "opencode"`）→ 匿名凭证
+//! `public`；空 key 且没开伪装（含 `noAuth` 账号）→ **一个凭证头都不发**。
+//!
+//! ── 凭证要求**未实测确认**（如实记录）──────────────────────────
+//! OpenCode 官方控制台文档给的 SystemOne 请求示例带
+//! `Authorization: Bearer $OPENCODE_API_KEY`，但从本项目沙箱探测该端点时，
+//! 无论带不带鉴权（`Bearer public` 与不带）上游都回
+//! `HTTP 451 {"error":{"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}}`，
+//! 因此**鉴权是否必需无法确认**。据此把凭证做成**可选**：预置卡默认
+//! 「无需鉴权」，用户可自行填 OpenCode Console 的 Key。
 //!
 //! ── 错误分类（对齐 `UpstreamErrorClass` 的四档语义，让编排原样生效）──
 //! 本函数不返回 `UpstreamErrorClass`（那个类型的构造与整条链的接口都收在
@@ -123,12 +150,13 @@ pub(crate) async fn forward(
         .and_then(Value::as_str)
         .unwrap_or(custom_providers::PROTOCOL_CHAT_COMPLETIONS);
     // ── 协议分派（见模块头）────────────────────────────────────
-    // 配置校验只放行三种协议，未知值仍 400 兜底 —— 明确的一句比「上游报了
-    // 一个看不懂的错」有用得多。
+    // 配置校验只放行四种协议（见 `custom_providers::PROTOCOLS`），未知值仍 400
+    // 兜底 —— 明确的一句比「上游报了一个看不懂的错」有用得多。
     let kind = match protocol {
         custom_providers::PROTOCOL_CHAT_COMPLETIONS => None,
         custom_providers::PROTOCOL_RESPONSES => Some(OutboundKind::Responses),
         custom_providers::PROTOCOL_ANTHROPIC => Some(OutboundKind::Anthropic),
+        custom_providers::PROTOCOL_SYSTEMONE => Some(OutboundKind::Systemone),
         other => {
             return Err(GatewayError::with_status(
                 400,
@@ -176,21 +204,42 @@ pub(crate) async fn forward(
     // 过了一遍，账号覆盖项只在这里能碰到）。
     let base_url = custom_providers::migrate_base_url(&base_url, quirks.emulate_opencode);
     if let Some(kind) = kind {
-        return forward_translated(
-            kind,
-            provider_id,
-            account_id,
-            &credential.api_key,
-            &base_url,
-            &quirks,
-            body,
-            proxy,
-            stream,
-            telemetry,
-            slot,
-            connections,
-        )
-        .await;
+        // SystemOne 有自己的出口（请求体非 chat、响应非 SSE），不套翻译链 ——
+        // 其余两种翻译协议照旧走 `forward_translated`。`stream` 只对翻译链与
+        // chat 透传有意义：它决定下游形态（SSE vs 聚合），翻译链内部还要按它
+        // 把结果交回编排层；SystemOne 恒非流式，不看它。
+        return match kind {
+            OutboundKind::Systemone => {
+                forward_systemone(
+                    provider_id,
+                    account_id,
+                    &credential.api_key,
+                    &base_url,
+                    &quirks,
+                    body,
+                    proxy,
+                    telemetry,
+                )
+                .await
+            }
+            kind => {
+                forward_translated(
+                    kind,
+                    provider_id,
+                    account_id,
+                    &credential.api_key,
+                    &base_url,
+                    &quirks,
+                    body,
+                    proxy,
+                    stream,
+                    telemetry,
+                    slot,
+                    connections,
+                )
+                .await
+            }
+        };
     }
     // chat 透传出口：入口翻译（Anthropic / Responses）暂存的内部字段（`_wb_*`，
     // 见 `protocol::mod` 的说明）绝不发上游 —— 严格校验的 OpenAI 兼容上游会拒绝
@@ -325,13 +374,19 @@ pub(crate) async fn forward(
     }
 }
 
-/// 出站翻译协议（[`forward_translated`] 两个分支的差异点收敛在这个枚举上）
+/// 出站协议（[`forward_translated`] 翻译分支的差异点收敛在这个枚举上；`Systemone`
+/// 是分派用的标记，实际出口是 [`forward_systemone`]）
 #[derive(Clone, Copy)]
 enum OutboundKind {
     /// OpenAI Responses（`POST {base}/responses`）
     Responses,
     /// Anthropic Messages（`POST {base}/v1/messages`）
     Anthropic,
+    /// OpenCode Zen SystemOne（`POST {base}/systemone`，原始 JSON 直通；见模块头的专节）。
+    /// 它有自己的出口 [`forward_systemone`]，**不进** [`forward_translated`] 的
+    /// 翻译链 —— 这里保留这个变体只为让分派点落在同一个 `kind` 上（与其它协议
+    /// 同形），`forward_translated` 里对它有防御分支。
+    Systemone,
 }
 
 impl OutboundKind {
@@ -340,6 +395,7 @@ impl OutboundKind {
         match self {
             Self::Responses => "responses",
             Self::Anthropic => "anthropic",
+            Self::Systemone => "systemone",
         }
     }
 }
@@ -507,7 +563,11 @@ async fn forward_translated(
     let api_key = api_key.trim();
     let has_key = !api_key.is_empty();
 
-    let (url, headers, payload) = match kind {
+    // 每个翻译分支同时交出它那条协议的上游→chat 流翻译机（`translate`）：
+    // 这样「什么协议配什么机器」与「URL / 头 / 体」在**同一个 arm** 里定稿，
+    // 下游不再对 `kind` 做第二次 match（少一处必须穷尽的分派、也少一处
+    // 对 Systemone 的防御分支）。
+    let (url, headers, payload, translate) = match kind {
         OutboundKind::Responses => {
             let url = format!(
                 "{}/responses{}",
@@ -531,7 +591,10 @@ async fn forward_translated(
             }
             quirks.apply_emulation_headers(&mut headers, api_key, &outbound_chat, base_url);
             quirks.apply_to(&mut headers);
-            (url, headers, payload)
+            let translate = TranslateMachine::Responses(
+                responses_outbound::ChatFromResponsesStream::new(&wire_model),
+            );
+            (url, headers, payload, translate)
         }
         OutboundKind::Anthropic => {
             // anthropic 惯例 baseUrl 不带 /v1（官方是 https://api.anthropic.com），
@@ -579,7 +642,19 @@ async fn forward_translated(
             }
             quirks.apply_emulation_headers(&mut headers, api_key, &outbound_chat, base_url);
             quirks.apply_to(&mut headers);
-            (url, headers, payload)
+            let translate = TranslateMachine::Anthropic(
+                anthropic_outbound::ChatFromAnthropicStream::new(&wire_model),
+            );
+            (url, headers, payload, translate)
+        }
+        OutboundKind::Systemone => {
+            // 防御：SystemOne 有自己的出口（[`forward_systemone`]），分派处
+            // （[`forward`]）已把它拦在外面。走到这里说明调用链被改坏了 ——
+            // 如实报一条内部错误，绝不 panic（release 是 panic=abort）。
+            return Err(GatewayError::with_status(
+                500,
+                "内部错误：SystemOne 协议不应进入协议翻译分支（算法 bug，请上报）",
+            ));
         }
     };
     let payload = serde_json::to_string(&payload)
@@ -631,8 +706,7 @@ async fn forward_translated(
     // 上游字节流先过协议翻译（→ 标准 chat SSE），再交给既有消费层：
     // 流式进 ForwardStream（reasoning 合并 / usage 提取 / model 回写），
     // 非流式进聚合器 —— 槽位与连接计数的移交时序与 chat 分支逐字同构
-    let translated =
-        Box::pin(ProtocolTranslateStream::new(kind, &wire_model, response, telemetry));
+    let translated = Box::pin(ProtocolTranslateStream::new(translate, response, telemetry));
     if stream {
         Ok(ForwardOutcome::Stream {
             status,
@@ -653,6 +727,140 @@ async fn forward_translated(
         .await?;
         Ok(ForwardOutcome::Completion { body: aggregated.body })
     }
+}
+
+/// SystemOne 的出站 URL：`{baseUrl}/systemone` + 记录上的 `urlSuffix`
+/// （通常为空；`urlSuffix` 的语义见 `custom_providers` 的模块头）。
+///
+/// 抽成纯函数是为了可测（URL 拼接的 `/` 归一是本项目踩过坑的地方，见
+/// `custom_providers::normalize_base_url` 的说明）。
+fn systemone_url(base_url: &str, url_suffix: &str) -> String {
+    format!("{}/systemone{}", base_url.trim_end_matches('/'), url_suffix)
+}
+
+/// SystemOne 的出站请求体：客户端字节**原样**，只做两处机械改写 ——
+///   ① `model` 换成上游真名（映射 alias → target；仅当两者忽略大小写不同才改）；
+///   ② 去掉编排层注入的 `stream:true`（`upstream::forward` 为「上游恒走流式」
+///      无条件注入；SystemOne 没有这个字段，留着等于给决策体塞一个 chat 产物）。
+///
+/// 抽成纯函数是为了可测：本函数不认识配置，`requested` / `wire_model` 由调用方
+/// 经 `custom_providers::wire_model_for` 算好后传入。
+fn systemone_outbound_body(body: &Value, requested: &str, wire_model: &str) -> Value {
+    let mut outbound = body.clone();
+    if !requested.is_empty() && !wire_model.eq_ignore_ascii_case(requested) {
+        if let Some(object) = outbound.as_object_mut() {
+            object.insert("model".to_string(), Value::String(wire_model.to_string()));
+        }
+    }
+    // 无条件的第二处：把编排层注入的 stream 摘掉（body 不是对象时什么都不做）
+    if let Some(object) = outbound.as_object_mut() {
+        object.remove("stream");
+    }
+    outbound
+}
+
+/// **SystemOne（OpenCode Zen 的 Jev 结构化决策）** 的一次转发 —— 见模块头专节。
+///
+/// 与 chat / 翻译分支的差异（这里就是全部）：URL 是 `{baseUrl}/systemone`、
+/// 请求体**原样**（只做模型名改写）、鉴权三档同 chat、响应**恒为 JSON 非流式**。
+/// 因此它不接收 `stream` / `slot` / `connections`：非流式路径下凭证随本栈帧
+/// 析构即可（与 chat 分支的非流式出口同一生命周期规则），没有流要交接。
+///
+/// 编排层的账（attempts / 429 冷却 / 401 顺延）全部照旧：本函数只把非 2xx
+/// 分类成 [`GatewayError`]（与 chat 路径共用 [`classify_custom_error`]）。
+async fn forward_systemone(
+    provider_id: &str,
+    account_id: &str,
+    api_key: &str,
+    base_url: &str,
+    quirks: &ProviderQuirks,
+    body: &Value,
+    proxy: Option<ResolvedProxy>,
+    telemetry: &Arc<RequestTelemetry>,
+) -> Result<ForwardOutcome, GatewayError> {
+    // ── 请求体：客户端字节原样，唯一的改写是 `model`（映射 alias → 上游真名）──
+    // 与 chat 路径同一解析函数（`wire_model_for`），但**不注入**思考等级：那是
+    // chat 侧的字段（`reasoning_effort`），塞进 SystemOne 的决策体没有意义。
+    // 也不套 `apply_emulation_to_body`（OpenCode 免费档的桩工具）—— 会改烂决策体。
+    let requested = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let (wire_model, _reasoning) = custom_providers::wire_model_for(provider_id, &requested);
+    if !requested.is_empty() && !wire_model.eq_ignore_ascii_case(&requested) {
+        logging::verbose(
+            "[CustomProvider]",
+            &format!("provider={provider_id} 按映射改写模型名 {requested} → {wire_model}"),
+        );
+    }
+    let outbound = systemone_outbound_body(body, &requested, &wire_model);
+    let payload = serde_json::to_string(&outbound)
+        .map_err(|error| GatewayError::with_status(500, format!("请求体序列化失败: {error}")))?;
+    // ── 出站头（三档鉴权，见模块头）────────────────────────────────
+    //   ① 账号有 apiKey → `Authorization: Bearer <key>`；
+    //   ② 空 key 且开了客户端伪装 → 匿名凭证 `public`（OpenCode 免费档那条路，
+    //      SystemOne 预置卡**不**开伪装，这一档只是与 chat 路径逐字对齐）；
+    //   ③ 空 key 且没开伪装（含 `noAuth` 账号）→ 一个凭证头都不发。
+    //   最后由记录上的静态额外头（`quirks.apply_to`）收口，用户显式声明的最优先。
+    let api_key = api_key.trim();
+    let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+    if !api_key.is_empty() {
+        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+    } else if quirks.emulate_opencode {
+        headers.push(("Authorization".to_string(), "Bearer public".to_string()));
+    }
+    quirks.apply_to(&mut headers);
+    let url = systemone_url(base_url, &quirks.url_suffix);
+    logging::verbose(
+        "[CustomProvider]",
+        &format!(
+            "POST {url} protocol=systemone model={} account={account_id} 出口={}",
+            if requested.is_empty() { "(默认)" } else { &requested },
+            describe_proxy(proxy.as_ref()),
+        ),
+    );
+    let transport = TransportRequest {
+        url,
+        headers,
+        payload,
+        proxy,
+        // 自定义家没有能力位（用户自己配的出口就是唯一口径：配了就代理，没配就直连）
+        system_proxy_when_unset: false,
+    };
+    let response = send_chat_request(&transport)
+        .await
+        .map_err(|error| error.to_gateway_error())?;
+
+    // ── 响应：2xx 打包上游 JSON；非 2xx 走与 chat 路径同一套分类 ──────
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        // Retry-After 要在读 body **之前**取（read_upstream_error 会吃掉响应）
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string);
+        let detail = read_upstream_error(response, telemetry.capture().as_deref()).await;
+        return Err(classify_custom_error(
+            status,
+            &detail.message,
+            retry_after.as_deref(),
+        ));
+    }
+    // 恒非流式：上游是 JSON（每题的取值 / 概率），不是 SSE。读全量文本再解析 ——
+    // 上游偶尔回非 JSON（网关错误页等）时给一条明确错误，绝不 panic。
+    let text = response.text().await.unwrap_or_default();
+    let body: Value = serde_json::from_str(&text).map_err(|error| {
+        GatewayError::with_status(
+            502,
+            format!("SystemOne 上游响应不是合法 JSON（HTTP {status}）: {error}"),
+        )
+    })?;
+    Ok(ForwardOutcome::Completion { body })
 }
 
 /// 上游协议 SSE 字节流 → 标准 chat SSE 字节流（responses / anthropic 共用壳）。
@@ -704,9 +912,11 @@ impl TranslateMachine {
 }
 
 impl ProtocolTranslateStream {
+    /// 收**已构造好的翻译机**（协议→机器的对应在调用点的每个 arm 里定稿，见
+    /// `forward_translated` 的说明）：本结构不认识任何协议，只管把上游字节
+    /// 喂进机器、把产出的帧排队下发。
     fn new(
-        kind: OutboundKind,
-        model: &str,
+        machine: TranslateMachine,
         response: reqwest::Response,
         telemetry: &Arc<RequestTelemetry>,
     ) -> Self {
@@ -726,14 +936,7 @@ impl ProtocolTranslateStream {
         );
         Self {
             inner: guarded,
-            machine: match kind {
-                OutboundKind::Responses => TranslateMachine::Responses(
-                    responses_outbound::ChatFromResponsesStream::new(model),
-                ),
-                OutboundKind::Anthropic => TranslateMachine::Anthropic(
-                    anthropic_outbound::ChatFromAnthropicStream::new(model),
-                ),
-            },
+            machine,
             pending: std::collections::VecDeque::new(),
             upstream_done: false,
             capture: telemetry.capture(),
@@ -979,4 +1182,66 @@ pub fn cooldown_model(provider_id: &str, requested: &str) -> String {
         return String::new();
     }
     custom_providers::wire_model_for(provider_id, requested).0
+}
+
+#[cfg(test)]
+mod tests {
+    //! SystemOne 分支的出站 URL / 体构造（纯函数，不依赖配置与网络）。
+    //!
+    //! 这两个函数是这条协议**唯一**被改写的地方，所以判据要钉死：
+    //! URL 拼对（不能多一个 `/`、不能漏 `systemone`）、体只改写 model 与摘 stream
+    //! 两处，其余字节原样。
+
+    use super::{systemone_outbound_body, systemone_url};
+    use serde_json::{json, Value};
+
+    #[test]
+    fn systemone_url_appends_path_and_trims_trailing_slash() {
+        // 预置卡的 baseUrl（末尾无斜杠）→ 追加 /systemone
+        assert_eq!(
+            systemone_url("https://opencode.ai/inference/systemone/v1", ""),
+            "https://opencode.ai/inference/systemone/v1/systemone"
+        );
+        // 末尾斜杠已由 `normalize_base_url` 归一，这里再防御一次（不拼出 `//`）
+        assert_eq!(
+            systemone_url("https://example.com/v1/", ""),
+            "https://example.com/v1/systemone"
+        );
+        // 记录上的 urlSuffix 原样追加
+        assert_eq!(
+            systemone_url("https://example.com/v1", "?beta=true"),
+            "https://example.com/v1/systemone?beta=true"
+        );
+    }
+
+    #[test]
+    fn systemone_body_rewrites_model_and_drops_stream() {
+        let body = json!({
+            "model": "jev-1.13-free",
+            "state": "…",
+            "questions": { "is_urgent": { "type": "noul" } },
+            // 编排层（upstream::forward）对每个请求注入的字段：
+            "stream": true,
+        });
+
+        // ① 零改写是常态：真名与请求名相同 → model 原样，只摘掉注入的 stream，
+        //    其余字段（state / questions）逐字不动
+        let same = systemone_outbound_body(&body, "jev-1.13-free", "jev-1.13-free");
+        assert_eq!(same.get("model").and_then(Value::as_str), Some("jev-1.13-free"));
+        assert!(same.get("stream").is_none(), "编排层注入的 stream 必须摘掉: {same}");
+        assert_eq!(same.get("questions"), body.get("questions"), "其余字节必须原样");
+        assert_eq!(same.get("state"), body.get("state"));
+
+        // ② 映射改名：请求名是别名、真名不同 → model 换成上游真名
+        let aliased = systemone_outbound_body(&body, "my-alias", "jev-1.13");
+        assert_eq!(aliased.get("model").and_then(Value::as_str), Some("jev-1.13"));
+        assert!(aliased.get("stream").is_none());
+
+        // ③ 与 chat 路径同一口径：仅大小写不同**不**改写（`eq_ignore_ascii_case`）
+        let cased = systemone_outbound_body(&body, "jev-1.13-free", "JEV-1.13-FREE");
+        assert_eq!(cased.get("model").and_then(Value::as_str), Some("jev-1.13-free"));
+
+        // ④ 原始体不被改动（helper 在副本上作业）
+        assert_eq!(body.get("stream"), Some(&Value::Bool(true)));
+    }
 }

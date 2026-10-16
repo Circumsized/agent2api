@@ -528,7 +528,11 @@ export function ModelTestDialog({ target, onClose }: { target: ModelTestTarget; 
         : t('映射上未绑定思考等级，「跟随映射」等于这次不注入'),
   ].filter(Boolean).join(t('；')) + t('。')
 
-  const protocols = bridge().wbProviders?.PROTOCOL_OPTIONS || FALLBACK_PROTOCOLS
+  // SystemOne（systemone）不是对话协议：模型测试后端（`TestProtocol`）只认三条
+  // 对话协议，列出来选中只会拿到一句「不支持的对话协议」—— 这里剔除它（它属于
+  // 自定义提供商表单的协议下拉，见 ui/providers.js 的 PROTOCOL_OPTIONS）。
+  const protocols = (bridge().wbProviders?.PROTOCOL_OPTIONS || FALLBACK_PROTOCOLS)
+    .filter(item => item.value !== 'systemone')
   const protocolLabel = protocols.find(item => item.value === protocol)?.label || protocol
   const proxyItems: Array<{ value: string; label: string; disabled?: boolean }> = [
     { value: '', label: t('跟随账号配置') },

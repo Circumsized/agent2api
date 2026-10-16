@@ -17,7 +17,7 @@
 //! {
 //!   "id": "custom-3f2a91b04c7e",   // custom- + 12 位小写十六进制（随机）
 //!   "name": "我的网关",             // 1~64 字符
-//!   "protocol": "chat_completions", // chat_completions / responses / anthropic
+//!   "protocol": "chat_completions", // chat_completions / responses / anthropic / systemone
 //!   "baseUrl": "https://api.example.com/v1",
 //!   "enabled": true,
 //!   "createdAt": 1730000000000,
@@ -71,11 +71,12 @@
 //!      `account_store::custom_accounts`）。提供商记录里只放「这家是谁」。
 //!
 //! ── 本阶段的范围（W 切片拆分）────────────────────────────────
-//! 存储与管理 API、账号接入、**模型清单存储 + 目录/路由接线 + Chat
-//! Completions 协议转发**（转发实现见 `providers::custom::forward`）。
-//! `is_custom_provider_id` / `protocol_of` / `wire_model_for` 是转发层的
-//! 判据入口；`responses` / `anthropic` 两种协议的转换器尚未实现 —— 配置可以
-//! 保存，转发时报 400（见 `providers::custom::forward` 的分派骨架）。
+//! 存储与管理 API、账号接入、**模型清单存储 + 目录/路由接线 + 四种协议的转发**
+//! （转发实现见 `providers::custom::forward`）：`chat_completions` 透传、
+//! `responses` / `anthropic` 走翻译链，`systemone`（OpenCode Zen 的 Jev 结构化
+//! 决策端点）走一条**原始 JSON 直通**分支 —— 请求体不是 chat 形态、响应不是 SSE，
+//! 因此不复用翻译链，只做模型名改写后原样 POST 到 `{baseUrl}/systemone`。
+//! `is_custom_provider_id` / `protocol_of` / `wire_model_for` 是转发层的判据入口。
 
 mod bindings;
 /// 自定义提供商**定义**的导入合并（账号导出文件里的 `customProviders` 段）。
@@ -117,9 +118,17 @@ pub const PROTOCOL_CHAT_COMPLETIONS: &str = "chat_completions";
 pub const PROTOCOL_RESPONSES: &str = "responses";
 /// 协议枚举：Anthropic Messages
 pub const PROTOCOL_ANTHROPIC: &str = "anthropic";
+/// 协议枚举：OpenCode Zen SystemOne（Jev 结构化决策，JSON 直通、非对话）。
+///
+/// 它不是 chat 形态：请求体是 `{model, state, questions}`（见
+/// `providers::custom::forward` 的模块头），上游也**不是** `/chat/completions`
+/// 而是 `{baseUrl}/systemone`，响应是 JSON 而不是 SSE。因此它是第四种自定义
+/// 协议，与翻译链（responses / anthropic）分开实现。
+pub const PROTOCOL_SYSTEMONE: &str = "systemone";
 
 /// 全部合法协议（校验用；顺序即错误文案与前端下拉的顺序）
-pub const PROTOCOLS: &[&str] = &[PROTOCOL_CHAT_COMPLETIONS, PROTOCOL_RESPONSES, PROTOCOL_ANTHROPIC];
+pub const PROTOCOLS: &[&str] =
+    &[PROTOCOL_CHAT_COMPLETIONS, PROTOCOL_RESPONSES, PROTOCOL_ANTHROPIC, PROTOCOL_SYSTEMONE];
 
 /// 展示名长度上限（字符数；1~64 是契约）
 const MAX_NAME_CHARS: usize = 64;

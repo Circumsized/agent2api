@@ -62,6 +62,8 @@ const FALLBACK_PROTOCOLS = [
   { value: 'chat_completions', label: 'OpenAI - Chat Completions' },
   { value: 'responses', label: 'OpenAI - Responses' },
   { value: 'anthropic', label: 'Anthropic - Messages' },
+  // SystemOne（OpenCode Zen 的 Jev 决策模型，JSON 直通）
+  { value: 'systemone', label: 'SystemOne（Jev 决策模型，JSON 直通）' },
 ]
 
 const PROTOCOL_ID = 'custom-protocol-select'

@@ -1,14 +1,23 @@
-//! 对话链路的另外两条协议入口（对照 `/v1/chat/completions` 实现）。
+//! 对话链路的另外几条协议入口（对照 `/v1/chat/completions` 实现）。
 //!
-//!   POST /v1/responses   Responses API（OpenAI 新协议；Codex 等客户端在用）
-//!   POST /v1/messages    Anthropic Messages API（Claude Code 等客户端在用）
+//!   POST /v1/responses    Responses API（OpenAI 新协议；Codex 等客户端在用）
+//!   POST /v1/messages     Anthropic Messages API（Claude Code 等客户端在用）
+//!   POST /v1/systemone    OpenCode Zen 的 SystemOne（Jev 决策模型，JSON 直通）
 //!
-//! ── 这两个入口做什么 ────────────────────────────────────────
+//! ── 前两个入口做什么 ────────────────────────────────────────
 //! 两者都是**薄壳**：把下游协议的请求翻译成 Chat Completions，交给与
 //! `/v1/chat/completions` **完全相同**的转发链路（模型解析、账号选路、轮换、
 //! 脱敏、记账都不重写），再把回程翻译回下游协议。翻译规则在
 //! `core::protocol` 里，公共管道在 `api::pipeline` 里 —— 本文件只负责
 //! 「HTTP 层」：取 body、调管道、按协议形态写响应。
+//!
+//! ── /v1/systemone 是第三种，与前两条不同 ──────────────────────
+//! 它**不做协议翻译**：SystemOne 的请求体是 `{model, state, questions}`
+//! （没有 `messages`），上游返回 JSON 而不是 SSE，因此进来什么体就转发什么体、
+//! 响应是普通 JSON（**永不** SSE）。它复用公共管道里与协议无关的那几件
+//! （模型解析 / 在途行 / 取消令牌 / 断线兜底 / 收尾记账），但**不**复用
+//! `forward_chat`（那会挂 chat 专属的自动续写）。转发实现见
+//! `providers::custom::forward` 的 SystemOne 分支。
 //!
 //! ── 为什么不做成「每家适配器各支持两套协议」──────────────────
 //! 见 `core::protocol` 模块头的完整论证。一句话：本项目所有上游经适配器层
@@ -503,6 +512,154 @@ pub async fn messages_endpoint(
             // 记账已完成（含手动终止的 408）：解除兜底并注销令牌
             guard.complete();
             response
+        }
+    }
+}
+
+// ─── POST /v1/systemone ─────────────────────────────────────
+
+/// POST /v1/systemone —— OpenCode Zen 的 **SystemOne（Jev 决策模型）** 入口。
+///
+/// ── 它与另两条入口的差别（见模块头）──────────────────────────
+/// 复用公共管道里与协议无关的部分（`resolve_model` / 在途行 / 取消令牌 /
+/// 断线兜底 / 记账 / 调试落盘），但：进来什么体就转发什么体（**不**跑
+/// `chat_from_*` 翻译、**不**校验 `messages`），恒非流式（下游就算在体里带
+/// `stream` 也忽略），响应是 JSON 而非 SSE。
+///
+/// ── 为什么自己接一遍 `forward` 而不是复用 `forward_chat` ──────────
+/// `forward_chat` 挂着**自动续写**（在 chat 的 `messages` 上追加 assistant /
+/// user 两个回合）—— 那是 chat 专属加工，对没有 `messages` 的决策体会凭空补字段。
+/// 所以这里直连 `state.upstream().forward(...)`，其余时序与另两条入口逐条对齐。
+pub async fn systemone_endpoint(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    // R9：同 responses_endpoint（`Option` + 取不到 = 不限制）
+    key_scope: Option<Extension<KeyScope>>,
+    body: Bytes,
+) -> Response {
+    let scope = key_scope.map(|Extension(scope)| scope);
+    let started_at = logging::now_ms();
+    // 请求来源客户端（UA 识别，见 `core::client`）：早失败路径与收尾记账共用
+    let client = crate::server::core::client::classify(&pipeline::user_agent_of(&headers));
+    let path = "/v1/systemone";
+    let raw = match parse_object(&state, started_at, path, &body, &client) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    // 就地补默认模型：payload 会被 `resolve_model` 改写（只动 model 字段），
+    // 原始体 raw 留一份供「下游原始名」回显
+    let mut payload = raw.clone();
+    let client_model = pipeline::model_field_text(&raw);
+    // SystemOne 体里没有 chat 的思考字段，这里恒为空串（读数仍按同口径采集）
+    let client_reasoning = pipeline::client_reasoning_of(&raw);
+    // 模型解析走公共管道（默认模型回落 / 别名映射 / 目录校验 / 这把 Key 的模型白名单）
+    let requested_model = match pipeline::resolve_model(&state, &mut payload, scope.as_ref()) {
+        Ok(model) => model,
+        Err(error) => {
+            record_early_failure(&state, started_at, &client_model, &client_reasoning, &client, &error);
+            return error.payload_response();
+        }
+    };
+    let user_agent = pipeline::user_agent_of(&headers);
+    logging::verbose(
+        "[Model]",
+        &format!(
+            "← POST {path} model={} bytes={} ua={user_agent}",
+            if requested_model.is_empty() { "(未指定)" } else { &requested_model },
+            body.len(),
+        ),
+    );
+    pipeline::write_debug_files(&body, "POST", path, &user_agent);
+
+    // telemetry 在这里创建（进行中行要在转发开始前插入，见另两条入口）
+    let telemetry = Arc::new(RequestTelemetry::with_id());
+    let telemetry_id = telemetry.snapshot().id;
+    state.request_stats().record_started(
+        &telemetry_id,
+        started_at,
+        &requested_model,
+        &client_model,
+        &client_reasoning,
+        &client,
+        // 真实流量：不是模型测试（见 `RecordContext::is_test`）
+        false,
+    );
+    // 在途回写（与另两条入口同一处时点与理由，见 `pipeline::live_row_sink`）
+    telemetry.set_live_sink(pipeline::live_row_sink(
+        state.request_stats(),
+        telemetry_id.clone(),
+        started_at,
+    ));
+    // 手动终止的取消令牌 + 断线兜底守卫（与另两条入口同一套语义）
+    if let Some(token) = cancellation::register(&telemetry_id) {
+        telemetry.set_cancel_token(token);
+    }
+    let mut guard = DisconnectGuard::new(state.request_stats(), telemetry_id.clone());
+    // 恒非流式：下游意愿固定 false（SystemOne 是 JSON 端点，没有流式形态）。
+    // 自动续写**不挂**（chat 专属，见函数头）。
+    let outcome = state
+        .upstream()
+        .forward(ForwardRequest {
+            body: payload,
+            stream: false,
+            dedupe_key: pipeline::sha256_hex(&body),
+            client_headers: headers,
+            telemetry: telemetry.clone(),
+            allowed_providers: scope,
+            // 不钉账号：走全局优先级队列（与对话主链路同）
+            pinned_account: None,
+            ignore_model_gate: false,
+            proxy_override: None,
+        })
+        .await;
+    let context = RecordContext {
+        stats: state.request_stats(),
+        telemetry,
+        started_at,
+        model: requested_model.clone(),
+        client_model,
+        client_reasoning,
+        status: 200,
+        raw_request: pipeline::capture_raw_body(&body),
+        raw_response: None,
+        is_test: false,
+        client: client.clone(),
+    };
+    // 期望 `Completion`（systemone 出站的转发分支只回它）。`Stream` 只可能来自
+    // 「同名模型被别的家（chat 协议）承载」的极端情形 —— 本入口不是 SSE 入口，
+    // 如实报错，绝不把一条 SSE 流当 JSON 下发。
+    let completion = match outcome {
+        Ok(ForwardOutcome::Completion { body }) => Ok(body),
+        Ok(ForwardOutcome::Stream { .. }) => Err(GatewayError::with_status(
+            502,
+            "SystemOne 入口收到了流式上游响应（该端点恒非流式）：请确认该模型只登记在 systemone 协议的提供商上",
+        )),
+        Err(error) => Err(error),
+    };
+    match completion {
+        Ok(body) => {
+            let context = RecordContext {
+                raw_response: pipeline::capture_raw_json(&body),
+                ..context
+            };
+            pipeline::record_entry(&context, None);
+            // 记账已完成：解除断线兜底并注销取消令牌
+            guard.complete();
+            json_response(body)
+        }
+        Err(error) => {
+            logging::console_line("[Model]", &format!("❌ {}", error.message));
+            // 状态码进记账上下文（明细里记的必须是客户端实际看到的那个码）
+            let context = RecordContext {
+                status: i64::from(error.http_status().as_u16()),
+                ..context
+            };
+            pipeline::record_entry(&context, Some(error.message.clone()));
+            // 记账已完成（含手动终止的 408）：解除兜底并注销令牌
+            guard.complete();
+            // SystemOne 的上游错误体是 `{error:{type,message}}`，与本站的
+            // OpenAI 风格 payload（`payload()` → `{error:{message,type,…}}`）同形
+            error.payload_response()
         }
     }
 }

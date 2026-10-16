@@ -169,6 +169,29 @@ pub(super) fn send_body<'a>(
     account: Option<&Value>,
     degraded: bool,
 ) -> SendBody<'a> {
+    // ── SystemOne（OpenCode Zen 的 Jev 决策模型）：跳过 chat 专属的两层加工 ──
+    // 它的请求体是 `{model, state, questions}`（**没有 `messages`**），而下面两层
+    // 都是 chat 形态的加工：
+    //   · 系统提示词层在无 `messages` 时会**凭空补一条** `messages`（见
+    //     `prompt::rewrite` 的 None 分支），给决策体塞一个 chat 侧字段；
+    //   · 脱敏层只对 `messages` 生效（`sanitize_body` 无 messages 时返回 None），
+    //     对它本就是空操作。
+    // 所以这里直接把客户端原始体放行 —— 自定义语义的模型名改写（映射 alias →
+    // 上游真名）由 `providers::custom::forward` 的 systemone 分支完成（本函数对
+    // 自定义 id 的模型名改写本就是零改写，与下面 `wire_target_for_provider` 的
+    // 说明一致）。`wire_model` 只作占位（自定义家的冷却键由编排层另算）。
+    if crate::server::core::custom_providers::protocol_of(provider_id).as_deref()
+        == Some(crate::server::core::custom_providers::PROTOCOL_SYSTEMONE)
+    {
+        let wire_model = ctx
+            .body
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        return SendBody { body: Cow::Borrowed(ctx.body), wire_model };
+    }
     // ── ① 系统提示词层（网关自有提示词：透传 / 替换 / 追加）──────────────
     // 在脱敏**之前**：与参考项目同序（提示词改写 → 脱敏），于是网关提示词
     // 自己万一命中指纹也会被后一层清掉；反过来的话，「刚换上去的那段提示词」

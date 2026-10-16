@@ -702,10 +702,13 @@ pub fn gateway_router(state: ServerState) -> Router {
         .route("/health", get(api::health::handle))
         .route("/v1/models", get(api::chat::list_models))
         .with_state(state.clone());
-    // 三条协议入口 + Anthropic 的 token 计数端点：都查 API Key。
+    // 四条协议入口 + Anthropic 的 token 计数端点：都查 API Key。
     // 与 chat/completions 完全同构：都走同一套转发链路，差异只在出入口的
     // 协议翻译（见 api::protocol 与 core::protocol 的模块头）。它们**就是**
     // 对话入口而不是管理 API —— 客户端的 base_url 换成 /v1 即可直接用。
+    // systemone：OpenCode Zen 的 Jev 决策模型入口（请求/响应都是 JSON 直通，
+    // 见 api::protocol 的 systemone_endpoint）——它同样是会消耗上游额度的入口，
+    // 因此与其余三条一起挂 protected。
     // count_tokens：Claude Code 在网关模式下会探它做上下文预算，上游没有
     // 对应能力，这里给带 `estimated: true` 的估算（见该函数说明）—— 给 404
     // 会让客户端按「网关不支持」处理，比一个粗略数字更糟。
@@ -713,6 +716,7 @@ pub fn gateway_router(state: ServerState) -> Router {
         .route("/v1/chat/completions", post(api::chat::chat_completions))
         .route("/v1/responses", post(api::protocol::responses_endpoint))
         .route("/v1/messages", post(api::protocol::messages_endpoint))
+        .route("/v1/systemone", post(api::protocol::systemone_endpoint))
         .route("/v1/messages/count_tokens", post(api::chat::count_tokens))
         .layer(middleware::from_fn(require_api_key))
         .with_state(state);

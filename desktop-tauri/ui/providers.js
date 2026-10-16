@@ -163,7 +163,7 @@
   }
 
   /**
-   * 协议下拉的三个选项：值与后端 custom_providers::PROTOCOLS 逐字一致，
+   * 协议下拉的选项（四条协议）：值与后端 custom_providers::PROTOCOLS 逐字一致，
    * 文案即添加表单与编辑弹窗共用的展示名。放在本文件（目录层）而不是让两个
    * 表单各写一份：新增一种协议时值与文案只有一处要改。
    */
@@ -171,6 +171,11 @@
     { value: 'chat_completions', label: 'OpenAI - Chat Completions' },
     { value: 'responses', label: 'OpenAI - Responses' },
     { value: 'anthropic', label: 'Anthropic - Messages' },
+    // SystemOne（OpenCode Zen 的 Jev 决策模型）：请求体是 model/state/questions
+    // 的 JSON、上游是 {baseUrl}/systemone、响应是 JSON 而非 SSE —— 与上面三条
+    // 对话协议都不是一回事（值必须与后端 custom_providers::PROTOCOLS 逐字一致）。
+    // 模型测试弹窗不列它（后端 TestProtocol 只认三条对话协议，见那里的过滤）。
+    { value: 'systemone', label: 'SystemOne（Jev 决策模型，JSON 直通）' },
   ];
 
   /** 按 id 取展示名：空值给空串、查不到就原样回显 id（调用方自行决定占位符） */
