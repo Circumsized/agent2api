@@ -96,6 +96,12 @@ export type ManageView = {
 export type CustomProviderRecord = {
   id?: string
   name?: string
+  /**
+   * 该家的协议（`chat_completions` / `responses` / `anthropic` / `systemone`）。
+   * 表尾要用它判「这一家是不是 SystemOne 直通通道」，好就地提醒调用地址
+   * （`systemone` 不是对话协议，走网关固定的 `/v1/systemone`）。
+   */
+  protocol?: string
   createdAt?: unknown
   /** `capabilities` 是该条模型的能力位覆盖（可选稀疏表，键名见 `model-capability`） */
   models?: Array<{ id?: unknown; enabled?: unknown; reasoning?: unknown; capabilities?: unknown }>

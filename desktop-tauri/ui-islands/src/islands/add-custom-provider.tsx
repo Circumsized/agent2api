@@ -66,6 +66,18 @@ const FALLBACK_PROTOCOLS = [
   { value: 'systemone', label: 'SystemOne（Jev 决策模型，JSON 直通）' },
 ]
 
+/**
+ * 各协议的**调用地址**（路径是网关固定的，不进词典 —— 与「文档」页「端点名是协议
+ * 固定叫法」同一口径）。它是用户建好 / 编辑这一家时最想知道的一件事：三条对话协议
+ * 各走各自的端点，而 `systemone` 是**直通通道**（不是对话协议），走 `/v1/systemone`。
+ */
+const CALL_URLS: Record<string, string> = {
+  chat_completions: '/v1/chat/completions',
+  responses: '/v1/responses',
+  anthropic: '/v1/messages',
+  systemone: '/v1/systemone',
+}
+
 const PROTOCOL_ID = 'custom-protocol-select'
 const NAME_ID = 'custom-name-input'
 const BASEURL_ID = 'custom-baseurl-input'
@@ -379,6 +391,12 @@ export function CustomProviderBlock({
                 ))}
               </SelectContent>
             </Select>
+            {/* 调用地址随协议变：选了 systemone 就在这里提醒——它是直通通道
+                （请求体原样 JSON 进出，不产出文本），不是三条对话协议之一 */}
+            <span className='hint'>
+              {t('调用地址：')}{CALL_URLS[protocol] || '—'}
+              {protocol === 'systemone' ? t('（直通通道，不是对话协议；请求体原样 JSON 进出）') : ''}
+            </span>
           </div>
           <div className='add-field'>
             <Label htmlFor={BASEURL_ID}>

@@ -1044,7 +1044,13 @@ function ModelsPage() {
               leading={isAllCustomView()
                 ? <>{t('这里是')}<b>{t('全部自定义提供商')}</b>{t('的模型合集：每家的清单互相独立，别名也只在自己那家内生效；要改名称 / 协议 / Base URL，到账号页该家账号的「设置」→ 提供商一栏。')}</>
                 : (custom
-                  ? <>{t('自定义提供商的清单')}<b>{t('只属于这一家')}</b>{t('：这里的模型不会出现在其他家，别名也只在这一家内生效。改名称 / 协议 / Base URL 在账号页该家账号的「设置」→ 提供商一栏；整家不要了，鼠标移到左栏这家上点 × 删除（连同名下账号）。')}</>
+                  ? <>{t('自定义提供商的清单')}<b>{t('只属于这一家')}</b>{t('：这里的模型不会出现在其他家，别名也只在这一家内生效。改名称 / 协议 / Base URL 在账号页该家账号的「设置」→ 提供商一栏；整家不要了，鼠标移到左栏这家上点 × 删除（连同名下账号）。')}
+                    {/* SystemOne 是**直通通道**（不是三条对话协议之一）：调用地址与
+                        路径都是网关固定的，选中这一家时就地提醒，省得用户回头翻说明 */}
+                    {customSource.record(provider)?.protocol === 'systemone'
+                      ? <>{' '}{t('调用地址：')}<b>/v1/systemone</b>{t('（直通通道，不是对话协议；请求体原样 JSON 进出）')}</>
+                      : null}
+                  </>
                   : undefined)}
               total={shown.length}
               range={paging.paged ? { start: paging.rangeStart, end: paging.rangeEnd } : null}

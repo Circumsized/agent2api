@@ -346,6 +346,7 @@
   "读本机客户端当前登录态，每次实时读取（删掉这条记录不影响客户端登录态）。用 Zai / Google 登录客户端的用户走这一条。": "Reads the local client's current login state live each time (deleting this record does not affect the client's login state). Users who sign in to the client with Zai / Google should use this one.",
   "读本机客户端当前登录态，每次实时读取（删掉这条记录不影响客户端登录态）。这一条归入 {label}。": "Reads the local client's current login state live each time (deleting this record does not affect the client's login state). This one is grouped under {label}.",
   "读本机客户端当前登录的 OAuth 令牌（明文 JSON，无需解密）。导入后由网关自动续期，无需跟随客户端的 2 小时时效手动换令牌。": "Reads the OAuth token the local client is currently signed in with (plaintext JSON, no decryption needed). After import the gateway renews it automatically, so you need not swap tokens manually to keep up with the client's 2-hour validity.",
+  "调用地址：": "Call address: ",
   "账号信息": "Account info",
   "账号信息不完整，请刷新后重试": "Account info is incomplete; refresh and try again",
   "账号已添加，但请留意：{warning}": "Account added, but note: {warning}",
@@ -393,6 +394,7 @@
   "（其中 {n} 把恢复为不限制）": " ({n} of which are now unrestricted)",
   "（必填）": " (Required)",
   "（有效期 {window}）": "(valid {window})",
+  "（直通通道，不是对话协议；请求体原样 JSON 进出）": " (a direct pass-through channel, not a chat protocol; the body goes out and comes back as raw JSON)",
   "（订阅池，模型名带 cline-pass/ 前缀，需要账号有对应订阅）。": " (subscription pool; model names carry the cline-pass/ prefix and the account needs the matching subscription).",
   "，下一次最快 {minutes} 分钟后": ", earliest next attempt in {minutes} min",
   "，并从 {n} 把 Key 的可用提供商里移除": ", and removed it from the allowed providers of {n} keys"
