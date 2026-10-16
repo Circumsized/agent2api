@@ -190,6 +190,13 @@ pub(crate) fn refresh_meta(kind: ProviderKind) -> (bool, i64) {
         // `orcaterm::models` 的模块头）：永远不是远程来源，也没有刷新时刻。
         // 与 ZCode 同一口径：如实回 `(false, 0)`，界面的「来源」列显示成内置清单。
         ProviderKind::OrcaTerm => (false, 0),
+        // Devin 的清单来自 `GetCliModelConfigs`（进程内缓存一份，见
+        // `devin::models` 的模块头）：拉到了账号那份才算远程来源 ——
+        // 内置快照只是「还没拉过」时的兜底，不算远程。
+        ProviderKind::Devin => (
+            super::devin::models::remote_refreshed(),
+            super::devin::models::last_refreshed_at(),
+        ),
     }
 }
 

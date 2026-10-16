@@ -361,6 +361,12 @@ impl AccountStore {
             // tokenTail / tokenExpireAt（续期是否在工作可被肉眼校验，见
             // `orcaterm_accounts.rs`）
             self.to_orcaterm_public_account(record)
+        } else if record.provider() == super::devin_accounts::DEVIN_PROVIDER_ID {
+            // Devin（Cognition）：单一入口（浏览器 PKCE 登录 / 导入本机 devin CLI
+            // 的 credentials.toml），公开形态去掉会话令牌本体、只留令牌尾号与
+            // 账号/套餐信息（见 `devin_accounts.rs`）。漏这一支会掉进下面的
+            // workbuddy 兜底形状：界面多出一批 uid/edition 之类与它无关的空字段。
+            self.to_devin_public_account(record)
         } else if record
             .provider()
             .starts_with(crate::server::core::custom_providers::ID_PREFIX)

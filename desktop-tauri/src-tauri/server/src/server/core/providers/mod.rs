@@ -128,6 +128,13 @@ pub mod content_block;
 /// 形态调用它 —— 挂在这里与其它子模块并列，便于对照「内置家走适配器、
 /// 自定义家走独立通道」的两条路径。
 pub mod custom;
+/// Devin（Windsurf 的订阅产品，`server.codeium.com`）。适配器实现在 `devin/`：
+/// 账号管理（**粘贴会话令牌** / 只读导入本机 devin CLI 的 `credentials.toml` /
+/// 浏览器 PKCE 登录）+ 模型目录（`GetCliModelConfigs`）+ **会话式转发**
+/// （上游是 Connect-RPC `GetChatMessage` 的 protobuf，取回复流自己翻译成 chat 帧，
+/// `is_stateful` 为 true）。上游没有续期接口，`supports_refresh` 恒 false，
+/// 见 `devin/mod.rs` 的模块头。
+pub mod devin;
 pub mod kuku;
 pub mod loomy;
 /// MonkeyCode（长亭科技的开源 AI 开发平台）。适配实现在 `monkeycode/`：
@@ -469,6 +476,24 @@ pub enum ProviderKind {
     /// 会话转发（建会话 → assistant SSE）+ 余额（月度 AI 配额）；
     /// `is_stateful` 为 true（请求内会话），见 `orcaterm/mod.rs` 的模块头。
     OrcaTerm,
+    /// Devin（Windsurf 的订阅产品）。适配实现在 `devin/`：账号管理（**粘贴会话
+    /// 令牌** / 只读导入本机 devin CLI 的 `credentials.toml` / 浏览器 PKCE 登录）
+    /// + 模型目录（`GetCliModelConfigs`）+ **会话式转发**（`is_stateful` 为 true）。
+    ///
+    /// ── 上游长什么样（从 devin CLI 与参考实现认清，见 `devin/mod.rs`）──
+    /// 推理走 Windsurf 的 **Connect-RPC**（protobuf 载荷 + 5 字节 Connect 帧），
+    /// 鉴权是 `Authorization: Basic <token>`（`devin-session-token$<jwt>`）；
+    /// 一次补全要把 OpenAI 的消息列表折成 Devin 自己的 `Message` 序列、把回复的
+    /// 帧翻回 `chat.completion.chunk`，单请求构造容纳不了，因此走会话式转发。
+    ///
+    /// ── 没有续期（一处必须先知道的事实）───────────────────────
+    /// 上游没有刷新接口（`supports_refresh` 恒 false）：令牌被拒只能重新登录，
+    /// 所以别处枚举「可刷新 provider」时**不要**把本家列进去。
+    ///
+    /// ── 为什么是**一家**（没有地区伴生）─────────────────────────
+    /// 上游只有一个应用服务器基址（`server.codeium.com`，可按账号覆盖），
+    /// 没有地区参数 —— 拆地区没有依据。
+    Devin,
 }
 
 /// 一个提供商的静态元数据。
@@ -565,6 +590,11 @@ pub const PROVIDERS: &[ProviderMeta] = &[
     // 它的模型名（glm-5.3 / kimi-k3 / deepseek-v4-* 等）与 codearts / catpaw /
     // zcode 大面积同名，同样靠末位让同名模型优先归已有各家。
     ProviderMeta { id: "orcaterm", label: "OrcaTerm" },
+    // Devin（Windsurf 的订阅产品）：单一入口（粘贴会话令牌 / 导入本机 devin CLI
+    // 登录态 / 浏览器 PKCE 登录），没有地区伴生。排在末尾（2026-10 接入，后到居后）。
+    // 它的模型名（claude-opus-5 / gpt-5.5 / swe-2 / gemini-3.1-pro 等）与 codearts /
+    // catpaw / zcode / orcaterm 大面积同名，同样靠末位让同名模型优先归已有各家。
+    ProviderMeta { id: "devin", label: "Devin" },
 ];
 
 /// provider id 在注册表里的下标（未知 id → None）。
@@ -649,6 +679,7 @@ pub fn kind_from_id(id: &str) -> Option<ProviderKind> {
         "antigravity" => Some(ProviderKind::Antigravity),
         "officeace" => Some(ProviderKind::OfficeAce),
         "orcaterm" => Some(ProviderKind::OrcaTerm),
+        "devin" => Some(ProviderKind::Devin),
         // 走到这里 = 上面的注册表判定已放行、这个 match 却没有对应分支：
         // 只可能是有人给 `PROVIDERS` 加了条目忘了加这里。开发期喊出来；
         // release 返回 None（见上：宁可为「未知」，不可误认成别家）。
@@ -691,6 +722,7 @@ pub const fn kind_id(kind: ProviderKind) -> &'static str {
         ProviderKind::Antigravity => "antigravity",
         ProviderKind::OfficeAce => "officeace",
         ProviderKind::OrcaTerm => "orcaterm",
+        ProviderKind::Devin => "devin",
     }
 }
 

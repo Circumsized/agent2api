@@ -32,7 +32,8 @@
 //!   "urlSuffix": "?beta=true",      // 追加到出站 URL 的查询串
 //!   "headers": { "Anthropic-Beta": "…" },  // 合并到默认头上的静态额外头
 //!   "anthropicToolType": "custom",  // 发 anthropic 上游时给工具补 type
-//!   "clientEmulation": "opencode"   // 按 OpenCode 官方 CLI 的形状补齐请求
+//!   "clientEmulation": "opencode",  // 按 OpenCode 官方 CLI 的形状补齐请求
+//!   "modelFilter": "opencode-free"  // 取模型清单时按上游事实收窄（见下）
 //! }
 //! ```
 //!
@@ -48,6 +49,14 @@
 //! 自定义家的清单与它的元数据**都是这条记录自己的东西**，覆盖就落在条目上。
 //! 两边的键名 / 归一 / 出口透出规则由 `core::capability` 统一（出口在
 //! `bindings::public_models`：别名继承 target 的能力位）。
+//!
+//! `modelFilter`（可选的**取清单过滤器**）解决的是另一件事：有些上游的
+//! `/models` 把「能用」与「不能用」的模型混在一张表里返回，直接全量落地就等于
+//! 把一堆点了必失败的名字广告出去。OpenCode Zen 的免费档正是如此 ——
+//! `/inference/v1/models` 同时列出免费档（`-free` / `big-pickle`）与需付费的
+//! `claude-opus-5`、`gpt-5.5` 等，混在一起。开着这个过滤器时，`fetch_upstream_models`
+//! 会在返回前按该上游的事实收窄（规则见 [`apply_model_filter`]）。它是 opt-in 的
+//! 运行期数据（预置卡「OpenCode Zen」写入 `"opencode-free"`），手工新建的家不带它。
 //!
 //! ── 三条设计约束（改代码前务必读）───────────────────────────
 //!   1. **id 用随机而不是时间戳/计数器**：卸载重装、多进程并发添加都不能
@@ -146,6 +155,34 @@ pub const TOOL_TYPE_CUSTOM: &str = "custom";
 /// 「OpenCode Zen」会写入它），不能按 baseUrl 猜 —— 猜错的后果是给别的上游
 /// 塞两个假工具。
 pub const CLIENT_EMULATION_OPENCODE: &str = "opencode";
+
+/// ── 模型清单过滤器（`modelFilter`）────────────────────────────
+///
+/// 取上游模型清单（[`fetch_upstream_models`]）时按**这家上游的事实**收窄结果的
+/// 开关。它是 opt-in 且会**减少**落地的模型：开着它 = 只留下点了真能用的那些。
+/// 与 `clientEmulation` 一样必须由**记录显式声明**（预置卡「OpenCode Zen」写入它），
+/// 不能按 baseUrl 猜 —— 猜错会把别家能用的模型过滤掉。
+///
+/// `opencode-free` = OpenCode Zen 免费档：上游 `/inference/v1/models` 把免费档与
+/// 需付费的模型（`claude-opus-5` / `gpt-5.5` …）混在一张表里返回，这里只保留
+/// 免费且可聊天的那些。判据与参考实现（magpie `packages/zen-free/models.mjs`
+/// 的 `isFree`）逐字对齐，见 [`apply_model_filter`]。
+pub const MODEL_FILTER_OPENCODE_FREE: &str = "opencode-free";
+
+/// 全部合法过滤器（校验用；空 = 不过滤，是缺省）。
+pub const MODEL_FILTERS: &[&str] = &[MODEL_FILTER_OPENCODE_FREE];
+
+/// OpenCode 官方模型目录（判定免费档用的 cost / status 来源）。
+///
+/// 与 `/inference/v1/models` 互补：后者只给 id 列表，免费与否要看这里的
+/// `cost`（0 代价即免费）与 `status`（`deprecated` 即退役）。它与清单一样是
+/// **尽力而为**的补充 —— 取不到就退化为「只看 id」，绝不让整个取清单动作失败。
+const OPENCODE_ZEN_CATALOG_URL: &str = "https://models.opencode.ai/api.json";
+
+/// OpenCode Zen 免费档里**不能当聊天模型用**的 id：SystemOne 决策模型
+/// （参考实现把它标为 `systemone` 协议，其可服务协议表里没有这一档）。
+/// 目录里查不到它，所以内置排除。
+const OPENCODE_ZEN_NON_CHAT_IDS: &[&str] = &["jev-1.13-free"];
 
 /// ── 余额查询方案（`balanceScheme`）────────────────────────────
 ///
@@ -281,6 +318,9 @@ fn item_of(object: &Map<String, Value>) -> Value {
         "headers": headers_of(object.get("headers")),
         "anthropicToolType": tool_type_of(object.get("anthropicToolType")),
         "clientEmulation": client_emulation,
+        // 取清单过滤器：读侧同样容错归一（坏值按「不过滤」丢弃，与 clientEmulation
+        // 同一取向 —— 认不出的值宁可不过滤，也别按一个手改坏的值收窄清单）
+        "modelFilter": model_filter_of(object.get("modelFilter")),
         // 余额查询方案：**读侧也会按 baseUrl 兜底识别**（存量记录没有这个键，
         // 见 BALANCE_SCHEMES 的说明），所以这里给的不是原始值而是归一结果
         "balanceScheme": balance_scheme_of_record(object),
@@ -463,6 +503,19 @@ fn client_emulation_of(value: Option<&Value>) -> String {
     } else {
         String::new()
     }
+}
+
+/// 读侧归一：模型清单过滤器。只认 [`MODEL_FILTERS`] 里的值（空 = 不过滤）。
+///
+/// 与 `client_emulation_of` 同一口径：认不出的值按「不过滤」处理 —— 过滤是
+/// **收窄**清单的动作，宁可多列几个（用户自己删）也不要按一个手改坏的值把
+/// 真能用的模型一起挡掉。
+fn model_filter_of(value: Option<&Value>) -> String {
+    let text = value.and_then(Value::as_str).map(str::trim).unwrap_or("");
+    if let Some(name) = MODEL_FILTERS.iter().find(|name| name.eq_ignore_ascii_case(text)) {
+        return (*name).to_string();
+    }
+    String::new()
 }
 
 /// 读取容错：`models` 数组 → 归一后的条目列表（非数组 / 坏条目一律丢弃）。
@@ -667,6 +720,8 @@ pub fn create(payload: &Value) -> Result<Value, String> {
         "headers": validate_headers(object.get("headers"))?,
         "anthropicToolType": validate_tool_type(object.get("anthropicToolType"))?,
         "clientEmulation": validate_client_emulation(object.get("clientEmulation"))?,
+        // 取清单过滤器（预置卡「OpenCode Zen」提交，见 MODEL_FILTERS 的说明）
+        "modelFilter": validate_model_filter(object.get("modelFilter"))?,
         // 余额查询方案（预置卡片提交，见 BALANCE_SCHEMES 的说明）
         "balanceScheme": validate_balance_scheme(object.get("balanceScheme"))?,
     });
@@ -743,6 +798,14 @@ pub fn update(id: &str, payload: &Value) -> Result<Value, String> {
         merged.insert(
             "clientEmulation".to_string(),
             Value::String(validate_client_emulation(Some(value))?),
+        );
+    }
+    // 取清单过滤器：与上面同一 patch 语义（带键才动）。编辑弹窗不发它 ——
+    // 「这家该过滤什么」是这一家是谁的派生事实；要清掉得显式传空串。
+    if let Some(value) = object.get("modelFilter") {
+        merged.insert(
+            "modelFilter".to_string(),
+            Value::String(validate_model_filter(Some(value))?),
         );
     }
     // 余额查询方案：与上面同一 patch 语义（带键才动）。编辑弹窗不发它 ——
@@ -1015,7 +1078,121 @@ pub async fn fetch_upstream_models(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    Ok(ids)
+    Ok(apply_model_filter(&provider, ids).await)
+}
+
+/// 按记录上的 [`MODEL_FILTERS`] 收窄取回的上游模型清单；没有过滤器时原样返回。
+///
+/// 目前只有 `opencode-free` 一条，它的实现是
+/// `ids.filter(|id| is_opencode_zen_free(id, catalog))`：
+///   - `catalog` 是**尽力而为**拉一次的 OpenCode 官方目录（[`fetch_opencode_zen_catalog`]）；
+///     取不到时按 `None` 走 —— 判据退化为「只看 id」，绝不因目录取不到而让
+///     「获取模型」失败。
+///
+/// 规则与参考实现（magpie `packages/zen-free/models.mjs` 的 `isFree` / `buildModels`）
+/// 逐字对齐：**免费 = 未退役 且（id 含 `free` 或 目录 cost 为 0 且 0）**。
+/// 与参考实现的一处**有意差异**：本项目自定义家是单一协议（此处 chat），因此不做
+/// 「每模型一套协议」的路由；只用协议面**排除不能聊的**（SystemOne，见
+/// [`OPENCODE_ZEN_NON_CHAT_IDS`]）。只走 responses / anthropic 的免费模型仍会列出 ——
+/// 转发仍按本家既有的 chat 路径发，是否可用由上游定。
+async fn apply_model_filter(provider: &Value, ids: Vec<String>) -> Vec<String> {
+    let filter = provider
+        .get("modelFilter")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !filter.eq_ignore_ascii_case(MODEL_FILTER_OPENCODE_FREE) {
+        return ids;
+    }
+    let catalog = fetch_opencode_zen_catalog().await;
+    ids.into_iter()
+        .filter(|id| is_opencode_zen_free(id, catalog.as_ref()))
+        .collect()
+}
+
+/// 尽力而为拉一次 OpenCode 官方目录里 **opencode（Zen）** 那家的 models 表。
+///
+/// 与 [`fetch_upstream_models`] 的取清单是两次独立请求：清单只给 id，免费判据
+/// 要 cost / status，两者互补。任何失败（网络 / 非 JSON / 结构不符）都返回
+/// `None` —— 调用方退化为「只看 id 的免费判据」，这是**有意的**：目录是
+/// 第三方（models.opencode.ai）的补充事实，它坏了不该让用户取不到模型。
+async fn fetch_opencode_zen_catalog() -> Option<Map<String, Value>> {
+    let client = egress::client_for(None);
+    let response = client
+        .get(OPENCODE_ZEN_CATALOG_URL)
+        .timeout(Duration::from_millis(FETCH_MODELS_TIMEOUT_MS))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let payload: Value = response.json().await.ok()?;
+    payload
+        .get("opencode")
+        .and_then(|provider| provider.get("models"))
+        .and_then(Value::as_object)
+        .cloned()
+}
+
+/// 一个 id 是不是「OpenCode Zen 免费档现在可聊天的模型」。
+///
+/// 判据三条（与 magpie `isFree` 对齐，外加一条本项目自己的排除）：
+///   1. 不在 [`OPENCODE_ZEN_NON_CHAT_IDS`] 里（SystemOne 决策模型，不能聊）；
+///   2. 目录里若说它退役（[`model_is_retired`]）则否；
+///   3. 免费 = id 含 `free`（不区分大小写）**或** 目录 cost 的 input 与 output
+///      都是 0 —— 后半条是 `big-pickle` 这类「无 `-free` 后缀的免费模型」
+///      被留下的依据。
+///
+/// `catalog` 为 `None`（目录没取到）时只剩第 3 条的前半 + 第 1 条：`big-pickle`
+/// 这类会漏，属可接受的退化（重取一次，或用户手工登记）。
+fn is_opencode_zen_free(id: &str, catalog: Option<&Map<String, Value>>) -> bool {
+    if OPENCODE_ZEN_NON_CHAT_IDS
+        .iter()
+        .any(|non_chat| non_chat.eq_ignore_ascii_case(id))
+    {
+        return false;
+    }
+    let entry = catalog
+        .and_then(|models| models.get(id))
+        .filter(|value| value.is_object());
+    if entry.is_some_and(model_is_retired) {
+        return false;
+    }
+    if id.to_ascii_lowercase().contains("free") {
+        return true;
+    }
+    entry.is_some_and(|model| {
+        let cost = model.get("cost");
+        let is_zero = |key: &str| {
+            cost.and_then(|cost| cost.get(key)).and_then(Value::as_f64) == Some(0.0)
+        };
+        is_zero("input") && is_zero("output")
+    })
+}
+
+/// 目录里一条模型记录是不是「已退役 / 已下线」（对齐 magpie 的 `isRetired`）。
+///
+/// 判据：`deprecated === true`，或 `status` / `lifecycle` 是
+/// `deprecated` / `retired` / `disabled`，或 `deprecated_at` / `retirement_date`
+/// 非 null。字段名与取值都取自官方目录的实测形态（2026-10）。
+fn model_is_retired(model: &Value) -> bool {
+    if model.get("deprecated").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    let state = |key: &str| {
+        model
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+    };
+    let is_retired_word =
+        |word: Option<String>| matches!(word.as_deref(), Some("deprecated" | "retired" | "disabled"));
+    if is_retired_word(state("status")) || is_retired_word(state("lifecycle")) {
+        return true;
+    }
+    ["deprecated_at", "retirement_date"]
+        .iter()
+        .any(|key| model.get(*key).is_some_and(|value| !value.is_null()))
 }
 
 /// 上游清单接口是否成功（2xx 即可：个别网关会回 200 以外的成功码）
@@ -1445,6 +1622,24 @@ fn validate_client_emulation(value: Option<&Value>) -> Result<String, String> {
     ))
 }
 
+/// 取清单过滤器：空 = 不过滤；非空必须是 [`MODEL_FILTERS`] 之一。其余值一律
+/// 拒绝 —— 与 `validate_client_emulation` 同一理由：它决定清单的**内容**，
+/// 拼错的值等于静默让用户看不到（或多看到）模型。
+fn validate_model_filter(value: Option<&Value>) -> Result<String, String> {
+    let Some(value) = value else { return Ok(String::new()) };
+    let text = value.as_str().unwrap_or("").trim();
+    if text.is_empty() {
+        return Ok(String::new());
+    }
+    if let Some(name) = MODEL_FILTERS.iter().find(|name| **name == text) {
+        return Ok((*name).to_string());
+    }
+    Err(format!(
+        "modelFilter 只支持 {}（留空表示不过滤）",
+        MODEL_FILTERS.join(" / ")
+    ))
+}
+
 /// 余额查询方案：空 = 这一家不查余额（手工新建的家）；非空必须是六个合法值
 /// 之一（见 [`BALANCE_SCHEMES`]）。其余值一律拒绝 —— 与 `validate_tool_type`
 /// 同一理由：方案决定**打哪个上游接口、带哪份凭证**，拼错的值等于把余额查到
@@ -1465,4 +1660,98 @@ fn validate_balance_scheme(value: Option<&Value>) -> Result<String, String> {
         "balanceScheme 只支持 {}（留空表示不查询余额）",
         BALANCE_SCHEMES.join(" / ")
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一份手工构造的 OpenCode Zen 目录记录（只带判据用到的键；
+    /// 形态取自 models.opencode.ai/api.json 的 `opencode.models`，2026-10 实测）。
+    fn zen_catalog() -> Map<String, Value> {
+        json!({
+            // 免费：0 代价、id 里没有 `-free`（「免费靠 cost 判」的那一类）
+            "big-pickle": { "cost": { "input": 0, "output": 0 } },
+            // 免费：`-free` 后缀 + 0 代价
+            "space-bunny-free": { "cost": { "input": 0, "output": 0 } },
+            // 有 `-free` 后缀，但目录说它已退役
+            "ling-3.1-flash-free": { "cost": { "input": 0, "output": 0 }, "status": "deprecated" },
+            // 付费：cost 非 0
+            "claude-opus-5": { "cost": { "input": 5, "output": 25 } },
+            "gpt-5.5": { "cost": { "input": 1.25, "output": 10 } },
+        })
+        .as_object()
+        .cloned()
+        .unwrap()
+    }
+
+    #[test]
+    fn zen_free_keeps_only_free_and_usable() {
+        let catalog = zen_catalog();
+        let ids = vec![
+            "big-pickle".to_string(),          // 0 代价 → 留
+            "space-bunny-free".to_string(),    // -free → 留
+            "claude-opus-5".to_string(),       // 付费 → 丢
+            "gpt-5.5".to_string(),             // 付费 → 丢
+            "ling-3.1-flash-free".to_string(), // 已退役 → 丢
+            "jev-1.13-free".to_string(),       // SystemOne（不可聊）→ 丢
+            "test".to_string(),                // 垃圾条目 → 丢
+            "brand-new-free".to_string(),      // 目录里还没有，但带 free → 留
+        ];
+        let kept: Vec<String> = ids
+            .into_iter()
+            .filter(|id| is_opencode_zen_free(id, Some(&catalog)))
+            .collect();
+        assert_eq!(
+            kept,
+            vec!["big-pickle", "space-bunny-free", "brand-new-free"]
+        );
+    }
+
+    /// 目录没取到（`None`）时的退化口径：只按 id 判 —— 带 `free` 的留下，
+    /// `big-pickle` 这类无后缀的免费模型会漏（可接受，见函数头说明）。
+    #[test]
+    fn zen_free_without_catalog_falls_back_to_id_rule() {
+        assert!(is_opencode_zen_free("mimo-v2.6-flash-free", None));
+        assert!(!is_opencode_zen_free("big-pickle", None));
+        assert!(!is_opencode_zen_free("claude-opus-5", None));
+        assert!(!is_opencode_zen_free("test", None));
+        // SystemOne 的排除不受目录有无影响
+        assert!(!is_opencode_zen_free("jev-1.13-free", None));
+    }
+
+    #[test]
+    fn retired_detection_matches_catalog_states() {
+        assert!(model_is_retired(&json!({ "deprecated": true })));
+        assert!(model_is_retired(&json!({ "status": "deprecated" })));
+        assert!(model_is_retired(&json!({ "lifecycle": "Disabled" })));
+        assert!(model_is_retired(&json!({ "retirement_date": "2026-01-01" })));
+        assert!(model_is_retired(&json!({ "deprecated_at": "2026-01-01" })));
+        assert!(!model_is_retired(&json!({ "status": null, "deprecated": null })));
+        assert!(!model_is_retired(&json!({})));
+    }
+
+    #[test]
+    fn model_filter_read_and_write_normalize() {
+        // 读侧：只认合法值，其余按「不过滤」丢弃
+        assert_eq!(
+            model_filter_of(Some(&json!("opencode-free"))),
+            MODEL_FILTER_OPENCODE_FREE
+        );
+        assert_eq!(
+            model_filter_of(Some(&json!("OpenCode-Free"))),
+            MODEL_FILTER_OPENCODE_FREE
+        );
+        assert_eq!(model_filter_of(Some(&json!("nonsense"))), "");
+        assert_eq!(model_filter_of(None), "");
+
+        // 写侧：非法值报错（不静默忽略）
+        assert_eq!(validate_model_filter(None).unwrap(), "");
+        assert_eq!(validate_model_filter(Some(&json!(""))).unwrap(), "");
+        assert_eq!(
+            validate_model_filter(Some(&json!("opencode-free"))).unwrap(),
+            MODEL_FILTER_OPENCODE_FREE
+        );
+        assert!(validate_model_filter(Some(&json!("nonsense"))).is_err());
+    }
 }

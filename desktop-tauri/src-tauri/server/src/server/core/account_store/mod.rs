@@ -107,6 +107,7 @@ pub mod cline_accounts;
 pub mod codearts_accounts;
 pub mod commandcode_accounts;
 pub mod custom_accounts;
+pub mod devin_accounts;
 pub mod kuku_accounts;
 pub mod loomy_accounts;
 pub mod monkeycode_accounts;

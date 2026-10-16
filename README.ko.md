@@ -23,7 +23,7 @@
 ## ✨ 핵심 기능
 
 - 🔌 **OpenAI 호환 엔드포인트** — `/v1/chat/completions`, `/v1/responses`, `/v1/messages`(`count_tokens` 포함)와 `/v1/models`를 하나의 게이트웨이로 제공. 어떤 클라이언트든 그대로 연결됩니다
-- 🏪 **내장 공급자 17개 사** — WorkBuddy, 小浣熊, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce(일부는 중국판 / 국제판 2종)에 더해 사용자 지정 패스스루 공급자(Chat / Responses / Anthropic)도 지원
+- 🏪 **내장 공급자 18개 사** — WorkBuddy, 小浣熊, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce(일부는 중국판 / 국제판 2종), Devin 에 더해 사용자 지정 패스스루 공급자(Chat / Responses / Anthropic)도 지원
 - 🔁 **자격 증명 완전 자동 관리** — 토큰 자동 갱신(싱글플라이트 중복 제거), 만료 임박 자격 증명 일괄 갱신, 모델 카탈로그 원격 갱신 + 정적 폴백
 - 🪂 **안정적인 전달** — 전역 우선순위 계정 큐, 모델별 한도 쿨다운, 429 자동 폴백, 결정적 실패는 빈 대기 없이 즉시 건너뜀
 - 🛡️ **보안과 마스킹** — 이그레스 프록시, 아웃바운드 핑거프린트 마스킹, 다중 게이트웨이 키, fail-closed, 로그인 사람 확인
@@ -55,6 +55,7 @@
 | Command Code | ✓ | ✗ 정적 API 키 | ✓ 원격 + 정적 폴백 | — | — | — |
 | Antigravity(Google, Gemini) | ✓ | ✓ | ✓ 원격 + 정적 폴백 | — | — | — |
 | OfficeAce(Huawei Cloud, OfficeClaw) | ✓ | ✓ 제어 영역 자동 갱신 | ✓ 원격만 | ✓ 포인트 잔액 | ✓ 일일 보너스(출석 + 신규 혜택) | — |
+| Devin | ✓ | ✗ 갱신 수단 없음 | ✓ 원격 + 정적 폴백 | — | — | — |
 | 사용자 지정 프로바이더 | ✓ Chat 패스스루 / Responses / Anthropic | — | ✓ 수동 등록 + 서버 측 가져오기 | — | — | — |
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages`(`count_tokens` 포함)와 `/v1/models`는 모든 플랫폼에 동일하게 적용됩니다. 모델 매핑, 전역 우선순위 큐, 429 폴백, 이그레스 프록시, 아웃바운드 핑거프린트 마스킹, 요청 리포트 역시 전 플랫폼 공통입니다.

@@ -23,7 +23,7 @@ Exposes a single `base_url` backed by multi-provider account management, model m
 ## ✨ Key Features
 
 - 🔌 **OpenAI-compatible endpoints** — one gateway exposing `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) and `/v1/models`; plug-and-play for any client
-- 🏪 **17 built-in providers** — WorkBuddy, Raccoon, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce (some in China / international editions), plus custom passthrough providers (Chat / Responses / Anthropic)
+- 🏪 **18 built-in providers** — WorkBuddy, Raccoon, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce (some in China / international editions), Devin, plus custom passthrough providers (Chat / Responses / Anthropic)
 - 🔁 **Fully automated credential care** — token auto-refresh with single-flight dedup, batch refresh of expiring credentials, model catalogs refreshed remotely with static fallback
 - 🪂 **Stable forwarding** — global priority account queue, per-model rate-limit cooldown, automatic 429 fallback, deterministic failures skipped fast instead of idling
 - 🛡️ **Security & redaction** — egress proxies, outbound fingerprint redaction, multiple gateway keys, fail-closed, login human verification
@@ -55,6 +55,7 @@ Reverse-proxy capabilities at a glance (✓ supported · ✗ not supported · �
 | Command Code | ✓ | ✗ static API key | ✓ remote + static fallback | — | — | — |
 | Antigravity (Google, Gemini) | ✓ | ✓ | ✓ remote + static fallback | — | — | — |
 | OfficeAce (Huawei Cloud, OfficeClaw) | ✓ | ✓ control-plane auto-refresh | ✓ remote only | ✓ points balance | ✓ daily bonus (check-in + newcomer gift) | — |
+| Devin | ✓ | ✗ no refresh flow | ✓ remote + static fallback | — | — | — |
 | Custom providers | ✓ chat passthrough / Responses / Anthropic | — | ✓ manual + server-side fetch | — | — | — |
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) and `/v1/models` behave identically for every platform; model mapping, the global priority queue, 429 fallback, egress proxying, outbound fingerprint redaction and request reporting apply to all platforms alike.

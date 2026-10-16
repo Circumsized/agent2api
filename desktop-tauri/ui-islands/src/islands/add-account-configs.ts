@@ -756,6 +756,47 @@ const ORCATERM: ProviderConfig = {
   ],
 }
 
+/**
+ * Devin（Windsurf 的订阅产品，`server.codeium.com`）：一家一个 provider，没有地区之分。
+ *
+ * ── 凭证形态 ────────────────────────────────────────────────
+ * 一枚会话令牌（形如 `devin-session-token$<jwt>`，`Authorization: Basic` 直达上游），
+ * 由 `devin auth login` 登录后写进 CLI 的 `credentials.toml`（键名 `windsurf_api_key`）。
+ * 粘贴支持（与后端 `devin::credentials` 同口径）：裸令牌，或**整份 `credentials.toml`**
+ * —— 网关会自己把 `windsurf_api_key` 剥出来。
+ *
+ * ── 导入桌面端 ──────────────────────────────────────────────
+ * CLI 是 Rust 程序，登录态在 `$XDG_DATA_HOME/devin/credentials.toml`（默认
+ * `~/.local/share/devin/`；Windows 为 `%APPDATA%\devin\`，**明文 TOML**，无需解密）。
+ * 只读导入：不写、不改 CLI 自己的数据。
+ *
+ * ── 没有刷新机制 ────────────────────────────────────────────
+ * 令牌不按到期时间失效（本家没有 refresh 接口），被上游拒绝（401）只能重新
+ * `devin auth login` 再导入 / 粘贴（与 CatPaw / KukuAI 同一处境，所以不渲染
+ * 「刷新 Token」那一类控件）。
+ *
+ * ── 为什么没有网页登录 ──────────────────────────────────────
+ * 后端有 PKCE 网页登录（`providers::devin::oauth`），但**壳侧不认这家**：
+ * `src-tauri/src/login.rs` 的 `normalize_provider` 未收 `devin`，登录窗口一开就
+ * 回「不支持网页登录的提供商」；而它的回调是普通 loopback 地址、`is_login_callback`
+ * 也不识别（只认小浣熊的自定义协议）。壳侧未接线前不挂 `webLogin`，避免露出一个
+ * 点下去必然失败的入口（接入后这里补上即可，与 Qoder 同款的内嵌窗口 + 轮询）。
+ */
+const DEVIN: ProviderConfig = {
+  provider: 'devin',
+  label: 'Devin',
+  // 登录态是本机 devin CLI 写的明文 credentials.toml，可只读导入
+  desktop: true,
+  desktopHint: t('读取本机 devin CLI 登录态（~/.local/share/devin/credentials.toml；Windows 为 %APPDATA%\\devin\\credentials.toml），需已运行 devin auth login'),
+  desktopNote: t('只读导入本机 devin CLI 的登录态（credentials.toml，明文 TOML、无需解密），不写不改 CLI 自己的数据。导入时会向 Devin 验一次身份并补上账号邮箱；本家没有续期机制，令牌被拒绝时重新运行 devin auth login 后再导入即可。'),
+  manualTitle: t('粘贴会话令牌'),
+  manualNoteHtml: t('粘贴 Devin CLI 的会话令牌（形如 <code>devin-session-token$&lt;jwt&gt;</code>，来自 <code>devin auth login</code> 写入的 <code>credentials.toml</code>）；也可以整份粘贴那份 <code>credentials.toml</code> —— 网关会自己取出其中的 <code>windsurf_api_key</code>。Devin <b>没有续期机制</b>：令牌不会按期过期，被上游拒绝（401）时重新登录、再粘贴一次即可。'),
+  fields: [
+    { key: 'token', label: 'token', rows: 3, placeholder: t('devin-session-token$… 或整份 credentials.toml') },
+    { key: 'name', label: t('备注名'), optional: true, placeholder: t('可选，留空则用上游返回的邮箱或令牌尾号') },
+  ],
+}
+
 /** 内置家的表单块，顺序与旧 ADD_FORMS 一致（只影响 DOM 里的块顺序，不影响界面） */
 export const BUILTIN_CONFIGS: ProviderConfig[] = [
   RACCOON,
@@ -800,6 +841,9 @@ export const BUILTIN_CONFIGS: ProviderConfig[] = [
   // OrcaTerm（腾讯云遨驰终端桌面客户端）：粘贴 accessToken / 导入桌面端登录态，
   // 排在末尾（与后端注册表 PROVIDERS 的排列一致，2026-10 接入）
   ORCATERM,
+  // Devin（Windsurf 的订阅产品）：粘贴会话令牌 / 导入本机 devin CLI 登录态，
+  // 排在末尾（与后端注册表 PROVIDERS 的排列一致，2026-10 接入）
+  DEVIN,
 ]
 
 /** WorkBuddy 的块 id（结构特殊，单独一个组件） */

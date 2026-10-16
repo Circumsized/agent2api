@@ -23,7 +23,7 @@
 ## ✨ 主な機能
 
 - 🔌 **OpenAI 互換エンドポイント** —— `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（`count_tokens` を含む）と `/v1/models` を 1 つのゲートウェイで公開。どのクライアントでもそのまま接続できます
-- 🏪 **内蔵 17 社のプロバイダー** —— WorkBuddy、小浣熊、CatPaw、AutoClaw、Qoder、Cline、Accio、ZCode、CodeArts、Trae、Loomy、KukuAI、MonkeyCode、Command Code、Antigravity、OfficeAce（一部は中国版 / 国際版の 2 種類）に加え、カスタムのパススループロバイダー（Chat / Responses / Anthropic）にも対応
+- 🏪 **内蔵 18 社のプロバイダー** —— WorkBuddy、小浣熊、CatPaw、AutoClaw、Qoder、Cline、Accio、ZCode、CodeArts、Trae、Loomy、KukuAI、MonkeyCode、Command Code、Antigravity、OfficeAce（一部は中国版 / 国際版の 2 種類）、Devin に加え、カスタムのパススループロバイダー（Chat / Responses / Anthropic）にも対応
 - 🔁 **認証情報の全自動メンテナンス** —— トークン自動更新（シングルフライト重複排除）、期限が近い認証情報の一括更新、モデルカタログのリモート更新 + 静的フォールバック
 - 🪂 **安定した転送** —— グローバル優先度アカウントキュー、モデル別レート制限クールダウン、429 自動フォールバック、決定論的な失敗は空待ちせず即スキップ
 - 🛡️ **セキュリティと秘匿化** —— 外向きプロキシ、送信フィンガープリントの秘匿化、複数のゲートウェイキー、fail-closed、ログイン時の人間確認
@@ -55,6 +55,7 @@
 | Command Code | ✓ | ✗ 静的な API キー | ✓ リモート + 静的フォールバック | — | — | — |
 | Antigravity（Google、Gemini） | ✓ | ✓ | ✓ リモート + 静的フォールバック | — | — | — |
 | OfficeAce（Huawei Cloud、OfficeClaw） | ✓ | ✓ コントロールプレーンの自動更新 | ✓ リモートのみ | ✓ ポイント残高 | ✓ デイリーボーナス（チェックイン + 新規特典） | — |
+| Devin | ✓ | ✗ 更新の仕組みなし | ✓ リモート + 静的フォールバック | — | — | — |
 | カスタムプロバイダー | ✓ Chat パススルー / Responses / Anthropic | — | ✓ 手動登録 + サーバー側取得 | — | — | — |
 
 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（`count_tokens` を含む）と `/v1/models` はすべてのプラットフォームで同じように扱われます。モデルマッピング、グローバル優先度キュー、429 フォールバック、外向きプロキシ、送信フィンガープリントの秘匿化、リクエストレポートも全プラットフォーム共通です。

@@ -99,6 +99,10 @@ export const PROVIDER_ICONS: Record<string, string> = {
   // （`cloudcache.tencent-cloud.com/qcloud/orcaterm/pwa/icon/orcaterm_192x192.png`，
   // 与客户端 / 官网显示的应用图标为同一形象）
   orcaterm: 'assets/providers/orcaterm.png',
+  // Devin：取自官方 PWA 图标
+  // （`app.devin.ai/assets/pwa/pwa-icon-512.png`，512×512，
+  // 与 PWA / 官网显示的应用图标为同一形象）
+  devin: 'assets/providers/devin.png',
 }
 
 /**
@@ -107,7 +111,7 @@ export const PROVIDER_ICONS: Record<string, string> = {
  * 账号表徽章、模型管理页都不跟着变；判据是「转发通道刚上线」，
  * 观察期结束后从这张表里删掉即可。
  */
-const BETA_PROVIDERS = new Set(['monkeycode', 'monkeycode-intl', 'commandcode', 'antigravity'])
+const BETA_PROVIDERS = new Set(['monkeycode', 'monkeycode-intl', 'commandcode', 'antigravity', 'devin'])
 
 type CardItem = {
   id: string

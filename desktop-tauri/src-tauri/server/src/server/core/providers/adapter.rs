@@ -57,8 +57,8 @@
 //!      架构文档 §4.2.1）：本 provider 的上游是不是**多步会话协议**
 //!      （CatPaw 是：round → turn → 工具循环 → completed）。默认 false；
 //!      覆写成 true 的是走会话式转发（`forward_conversation`）的家（CatPaw /
-//!      Qoder / Accio / CodeArts / Trae / Kuku / MonkeyCode，见各自 `mod.rs`
-//!      的模块头）。`forward_conversation` 是
+//!      Qoder / Accio / CodeArts / Trae / Kuku / MonkeyCode / OrcaTerm / Devin，
+//!      见各自 `mod.rs` 的模块头）。`forward_conversation` 是
 //!      会话式转发的入口（默认 503，只有有状态 provider 覆写），编排层的
 //!      `provider_loop` 按 `is_stateful` 分流到它 —— 分流落地后本文件不再需要
 //!      任何死代码抑制。
@@ -861,7 +861,7 @@ pub trait ProviderAdapter: Send + Sync {
     /// `ForwardOutcome`，于是 `chat.rs` 的其余链路（脱敏、记账、错误写出）零改动。
     ///
     /// 覆写成 true 的是走会话式转发入口的家（CatPaw / Qoder / Accio /
-    /// CodeArts / Trae / Kuku / MonkeyCode，见各自 `mod.rs` 的模块头）。
+    /// CodeArts / Trae / Kuku / MonkeyCode / OrcaTerm / Devin，见各自 `mod.rs`）。
     fn is_stateful(&self) -> bool {
         false
     }
@@ -1152,6 +1152,9 @@ pub fn adapter_for(kind: ProviderKind) -> &'static dyn ProviderAdapter {
         // 余额全部已接通（建会话 → assistant SSE，`is_stateful` 为 true，
         // 见 `orcaterm/mod.rs` 与 `orcaterm/adapter.rs` 的模块头）
         ProviderKind::OrcaTerm => &super::orcaterm::ORCATERM_ADAPTER,
+        // Devin（Windsurf 的订阅产品）：有状态会话式转发（Connect-RPC protobuf 的
+        // GetChatMessage，见 `devin/mod.rs` 的模块头）
+        ProviderKind::Devin => &super::devin::DEVIN_ADAPTER,
     }
 }
 
@@ -1251,6 +1254,10 @@ pub fn implemented_kinds() -> Vec<ProviderKind> {
         // 远程模型目录（静态清单，`supports_model_refresh()` 为 false）——
         // 进本列表只代表「已实现」（与 Zcode 同一口径：刷新循环对它是空操作）。
         ProviderKind::OrcaTerm,
+        // Devin：适配器已接线（账号 / 目录 / 会话式转发 / 网页登录），且有远程目录
+        // （`GetCliModelConfigs`，`supports_model_refresh()` 为 true）—— 必须在列表里，
+        // 否则目录刷新循环不会问它（与 Trae 同一理由）。
+        ProviderKind::Devin,
     ]
 }
 

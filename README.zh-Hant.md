@@ -23,7 +23,7 @@
 ## ✨ 核心特性
 
 - 🔌 **OpenAI 相容端點** —— 統一暴露 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（含 `count_tokens`）與 `/v1/models`，客戶端即插即用
-- 🏪 **17 家內建供應商** —— WorkBuddy、小浣熊、CatPaw、AutoClaw、Qoder、Cline、Accio、ZCode、CodeArts、Trae、Loomy、KukuAI、MonkeyCode、Command Code、Antigravity、OfficeAce（部分分中國 / 國際兩版），另支援自訂供應商透傳（Chat / Responses / Anthropic）
+- 🏪 **18 家內建供應商** —— WorkBuddy、小浣熊、CatPaw、AutoClaw、Qoder、Cline、Accio、ZCode、CodeArts、Trae、Loomy、KukuAI、MonkeyCode、Command Code、Antigravity、OfficeAce（部分分中國 / 國際兩版）、Devin，另支援自訂供應商透傳（Chat / Responses / Anthropic）
 - 🔁 **憑證全自動維護** —— Token 自動續期（單飛去重）、臨期憑證批次重新整理、模型目錄遠端重新整理 + 靜態備援
 - 🪂 **穩定轉發** —— 全域優先順序帳號佇列、依模型限額冷卻、429 自動降級、確定性失敗快速跳過不空等
 - 🛡️ **安全與脫敏** —— 出口代理、出站指紋脫敏、多把閘道 Key、fail-closed、登入人機驗證
@@ -55,6 +55,7 @@
 | Command Code | ✓ | ✗ 靜態 API Key | ✓ 遠端 + 靜態備援 | — | — | — |
 | Antigravity（Google，Gemini） | ✓ | ✓ | ✓ 遠端 + 靜態備援 | — | — | — |
 | OfficeAce（華為雲果辦 / OfficeClaw） | ✓ | ✓ 控制面自動續期 | ✓ 僅遠端 | ✓ 積分餘額 | ✓ 每日獎勵（簽到 + 新人禮） | — |
+| Devin | ✓ | ✗ 無續期機制 | ✓ 遠端 + 靜態備援 | — | — | — |
 | 自訂供應商 | ✓ Chat 透傳 / Responses / Anthropic | — | ✓ 手動登記 + 伺服器端拉取 | — | — | — |
 
 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（含 `count_tokens`）與 `/v1/models` 對所有平台一視同仁；模型對應、全域優先順序佇列、429 降級、出口代理、出站指紋脫敏與請求報表同樣對全平台通用。

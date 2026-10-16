@@ -529,6 +529,9 @@ async function submitCreate(context: FootContext): Promise<void> {
     // 客户端形态伪装（OpenCode 免费档）：只有预置清单声明了的家才有，
     // 建完可在账号设置的「提供商」一段里改
     if (preset?.clientEmulation) payload.clientEmulation = preset.clientEmulation
+    // 取清单过滤器（OpenCode Zen 免费档）：只有预置清单声明了的家才有；
+    // 后端据此在「获取模型」时按该上游事实收窄清单（见 preset-providers.js）
+    if (preset?.modelFilter) payload.modelFilter = preset.modelFilter
     // 余额查询方案：预置卡声明了才有（deepseek / opencode / glm-cn / sub2api /
     // newapi / sensenova 六个键）。后端校验后写进提供商记录的 `balanceScheme`
     // —— 之后的余额查询、账号设置里的「查询设置」段都认这一个事实

@@ -874,6 +874,30 @@ pub async fn add_account(state: &ServerState, body: &Bytes) -> Response {
                 if import_desktop { "desktop" } else { "manual" },
             )
         }
+        // Devin（Windsurf 的订阅产品）：**粘贴会话令牌**（`token` / `accessToken` /
+        // `apiKey`…；整段 `credentials.toml` 也认）→ 手动添加。`importDesktop: true`
+        // → **只读导入本机 devin CLI 的 `credentials.toml`**（登录态在 CLI 自己那份
+        // 文件里，读不到就 400 —— 与 OrcaTerm 同一「读桌面端登录态」的口径）。
+        //
+        // **不调上游**（与 CodeArts / OfficeAce 同口径）：凭据是登录 / 导入换来的，
+        // 添加时没有可交换的授权码。浏览器 PKCE 登录是另一条链路（适配器的
+        // `supports_web_login` 走 `/api/session/login/start` → 回调 →
+        // `core::login` 的 Devin 分支 → 同一个落账号入口 `add_devin_account`）。
+        Some(crate::server::core::providers::ProviderKind::Devin) => {
+            if import_desktop {
+                match crate::server::core::login::devin::cli_credential() {
+                    Ok(credential) => store.add_devin_account(&credential, import_name, "desktop"),
+                    Err(reason) => return management_error(400, reason),
+                }
+            } else {
+                match crate::server::core::providers::devin::credentials::Credential::from_payload(
+                    &payload,
+                ) {
+                    Ok(credential) => store.add_devin_account(&credential, import_name, "manual"),
+                    Err(reason) => Err(AccountStoreError::new(reason, 400)),
+                }
+            }
+        }
         // WorkBuddy 系的两家（国内版 / 国际版）：同一套凭证形态与落账号路径，
         // 差别只有归属 —— provider id 自己就是归属（拆家后不再从 payload 里的
         // `edition` 反推：那是账号的属性，而落哪一家是身份问题）。

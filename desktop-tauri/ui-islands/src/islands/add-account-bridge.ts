@@ -57,6 +57,12 @@ export type PresetRecord = {
   quirks?: CustomProviderRecord['quirks']
   /** 客户端形态伪装：随创建写进提供商记录（OpenCode Zen 用它过免费档的三道校验） */
   clientEmulation?: string
+  /**
+   * 「获取模型」清单过滤器（OpenCode Zen 免费档）：随创建写进提供商记录，
+   * 后端按它收窄该账号的模型清单（见 preset-providers.js 与
+   * `custom_providers::apply_model_filter`）。
+   */
+  modelFilter?: string
   /** 该家账号的默认取值（表单初始勾选态）：noAuth = 预勾「该上游无需鉴权」 */
   account?: { noAuth?: boolean }
   /** 余额查询方案：创建时随记录写入 `balanceScheme`（见 `CustomProviderRecord`） */

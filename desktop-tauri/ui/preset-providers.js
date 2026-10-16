@@ -213,6 +213,10 @@
       // 请求体形态）由该开关统一补齐，见后端 providers::custom::emulation
       // 的模块头（含 2026-10-14 对着官方客户端 v2.0.27 的实测记录）
       clientEmulation: 'opencode',
+      // 「获取模型」只列免费档：上游 /inference/v1/models 把免费档与付费模型混在
+      // 一张表里返回，过滤规则见后端 custom_providers::apply_model_filter
+      // （对齐参考实现 magpie packages/zen-free 的 isFree）
+      modelFilter: 'opencode-free',
       account: { noAuth: true },
     },
     {

@@ -23,7 +23,7 @@ Expõe um único `base_url` com gerenciamento de contas multi-provedor, gerencia
 ## ✨ Principais recursos
 
 - 🔌 **Endpoints compatíveis com OpenAI** — um único gateway expondo `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) e `/v1/models`; qualquer cliente conecta sem ajustes
-- 🏪 **17 provedores integrados** — WorkBuddy, 小浣熊, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce (alguns nas edições China / global), além de provedores personalizados em passthrough (Chat / Responses / Anthropic)
+- 🏪 **18 provedores integrados** — WorkBuddy, 小浣熊, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce (alguns nas edições China / global), Devin, além de provedores personalizados em passthrough (Chat / Responses / Anthropic)
 - 🔁 **Credenciais com manutenção totalmente automática** — renovação automática de token com deduplicação single-flight, renovação em lote de credenciais prestes a vencer, catálogos de modelos atualizados remotamente com fallback estático
 - 🪂 **Encaminhamento estável** — fila global de contas por prioridade, cooldown de limite por modelo, fallback automático em 429, falhas determinísticas são puladas rápido em vez de esperar à toa
 - 🛡️ **Segurança e mascaramento** — proxies de saída, mascaramento de impressão digital de saída, várias chaves de gateway, fail-closed, verificação humana no login
@@ -55,6 +55,7 @@ Panorama dos recursos de proxy reverso por plataforma (✓ suportado · ✗ não
 | Command Code | ✓ | ✗ API key estática | ✓ remota + fallback estático | — | — | — |
 | Antigravity (Google, Gemini) | ✓ | ✓ | ✓ remota + fallback estático | — | — | — |
 | OfficeAce (Huawei Cloud, OfficeClaw) | ✓ | ✓ renovação automática do plano de controle | ✓ somente remota | ✓ saldo de pontos | ✓ bônus diário (check-in + presente de boas-vindas) | — |
+| Devin | ✓ | ✗ sem mecanismo de renovação | ✓ remota + fallback estático | — | — | — |
 | Provedores personalizados | ✓ passthrough de chat / Responses / Anthropic | — | ✓ registro manual + busca no servidor | — | — | — |
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) e `/v1/models` funcionam igual para todas as plataformas; mapeamento de modelos, fila global de prioridade, fallback em 429, proxy de saída, mascaramento de impressão digital de saída e relatórios de requisições valem para todas as plataformas.

@@ -38,7 +38,8 @@ SPDX 的 `"MIT"` 的原因：那个标识会漏掉这里的附加限制。
    本项目是一个用于学习 HTTP 反向代理、SSE 流式透传、多账号选路、内容脱敏与
    桌面端打包（Tauri）等技术主题的实践项目，面向开发者之间的技术交流。
    它不是官方产品，与任何被接入服务的提供方（包括但不限于腾讯 WorkBuddy /
-   CodeBuddy、美团 CatPaw、小浣熊、AutoClaw、Cline、Qoder 及其各自的运营主体）
+   CodeBuddy、美团 CatPaw、小浣熊、AutoClaw、Cline、Qoder、华为云 CodeArts、
+   Cognition Devin 及其各自的运营主体）
    均无任何关联，未获得它们的授权、认可或赞助。
 
 2. 关于反向代理行为
@@ -89,3 +90,16 @@ SPDX 的 `"MIT"` 的原因：那个标识会漏掉这里的附加限制。
    本项目中的接口形态、协议字段等信息来自对官方客户端公开网络通信的
    观察与整理，相关商标与服务的权利归其各自所有者。若权利人认为
    本项目存在不当之处，请联系作者，将及时调整或删除。
+
+7. 第三方参考实现与致谢
+
+   Devin 提供商的实现移植自以下 MIT 许可的开源项目，谨此致谢：
+
+   - magpie（https://github.com/yetone/magpie），MIT
+   - magpie-community / plugins（https://github.com/magpie-community/plugins），MIT
+     其中 `packages/devin`（Devin 订阅接入）与 `packages/zen-free`
+     （OpenCode Zen 免费模型的判定规则）是本项目相关模块的移植来源。
+
+   移植仅涉及协议形态与判定规则（接口路径、protobuf 字段号、请求改写与
+   免费模型判据），上游协议随其服务变更而可能失效。上述项目的许可与版权
+   归其各自作者所有。
