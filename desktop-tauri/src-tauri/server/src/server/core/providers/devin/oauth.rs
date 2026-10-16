@@ -323,8 +323,10 @@ mod tests {
     }
 
     #[test]
-    fn identity_maps_a_refused_token_to_refused() {
-        // 这条只验映射语义（不联网）：`classify_failure` 对 unauthenticated 给 401
+    fn a_refused_token_classifies_as_unauthorized() {
+        // 这条只验「上游错误体 → 状态码」的映射（不联网）：`classify_failure` 对
+        // unauthenticated 给 401。`who_by_key` 那层「401 → Refused」的取舍要联网
+        // 才能验，不在这里测 —— 所以测试名只说它真正断言的东西。
         assert_eq!(401, super::super::stream::classify_failure(200, "{\"error\":{\"code\":\"unauthenticated\",\"message\":\"bad\"}}").status_code);
     }
 }

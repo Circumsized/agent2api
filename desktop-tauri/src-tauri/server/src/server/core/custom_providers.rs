@@ -190,8 +190,19 @@ const OPENCODE_ZEN_CATALOG_URL: &str = "https://models.opencode.ai/api.json";
 
 /// OpenCode Zen 免费档里**不能当聊天模型用**的 id：SystemOne 决策模型
 /// （参考实现把它标为 `systemone` 协议，其可服务协议表里没有这一档）。
-/// 目录里查不到它，所以内置排除。
+///
+/// 这份名单是**官方文档协议表的快照**（`opencode.ai/docs/models` 的 `systemone`
+/// 一档），不是从目录接口拿的 —— 目录里根本没有 `jev-*`（这也是参考实现要读 docs
+/// 表的原因）。刷新方式：对照那份表，把协议 ∉ {chat, responses, anthropic} 的免费
+/// id 追加到下面。
 const OPENCODE_ZEN_NON_CHAT_IDS: &[&str] = &["jev-1.13-free"];
+
+/// OpenCode Zen 免费档里**没有 `-free` 后缀、却确实零代价**的 id。
+///
+/// 这是目录取不到时的兜底白名单，角色等同于参考实现 `discover()` 在目录失败时
+/// 退回的那份 `bootstrapProvider`（其中 `big-pickle` 的 cost 就是 0/0）。
+/// 没有它的话，`models.opencode.ai` 抖动一次，「获取模型」就会少列这些免费模型。
+const OPENCODE_ZEN_FREE_ALLOWLIST: &[&str] = &["big-pickle"];
 
 /// ── 余额查询方案（`balanceScheme`）────────────────────────────
 ///
@@ -1044,6 +1055,14 @@ pub async fn fetch_upstream_models(
     if base_url.is_empty() {
         return Err("该提供商没有配置 baseUrl，无法拉取模型清单".to_string());
     }
+    // SystemOne 那档上游（`…/systemone/v1`）**没有** `/models` 端点：真打过去只会
+    // 换来一条上游的 404/451，不如把话说清楚。预置卡已随卡登记好模型，无需再取。
+    if protocol == PROTOCOL_SYSTEMONE {
+        return Err(
+            "该上游是 SystemOne 直通通道，没有 /models 端点：请在「模型管理」页手动登记模型"
+                .to_string(),
+        );
+    }
     let url = if protocol == PROTOCOL_ANTHROPIC {
         format!("{base_url}/v1/models")
     } else {
@@ -1161,12 +1180,10 @@ async fn fetch_opencode_zen_catalog() -> Option<Map<String, Value>> {
 /// 判据三条（与 magpie `isFree` 对齐，外加一条本项目自己的排除）：
 ///   1. 不在 [`OPENCODE_ZEN_NON_CHAT_IDS`] 里（SystemOne 决策模型，不能聊）；
 ///   2. 目录里若说它退役（[`model_is_retired`]）则否；
-///   3. 免费 = id 含 `free`（不区分大小写）**或** 目录 cost 的 input 与 output
-///      都是 0 —— 后半条是 `big-pickle` 这类「无 `-free` 后缀的免费模型」
-///      被留下的依据。
-///
-/// `catalog` 为 `None`（目录没取到）时只剩第 3 条的前半 + 第 1 条：`big-pickle`
-/// 这类会漏，属可接受的退化（重取一次，或用户手工登记）。
+///   3. 免费 = id 含 `free`（不区分大小写）**或** [`OPENCODE_ZEN_FREE_ALLOWLIST`]
+///      命中 **或** 目录 cost 的 input 与 output 都是 0 —— 后两条是 `big-pickle`
+///      这类「无 `-free` 后缀的免费模型」被留下的依据。白名单那一条不看目录，
+///      所以目录取不到时它照样留得住。
 fn is_opencode_zen_free(id: &str, catalog: Option<&Map<String, Value>>) -> bool {
     if OPENCODE_ZEN_NON_CHAT_IDS
         .iter()
@@ -1180,7 +1197,11 @@ fn is_opencode_zen_free(id: &str, catalog: Option<&Map<String, Value>>) -> bool 
     if entry.is_some_and(model_is_retired) {
         return false;
     }
-    if id.to_ascii_lowercase().contains("free") {
+    if id.to_ascii_lowercase().contains("free")
+        || OPENCODE_ZEN_FREE_ALLOWLIST
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(id))
+    {
         return true;
     }
     entry.is_some_and(|model| {
@@ -1209,7 +1230,10 @@ fn model_is_retired(model: &Value) -> bool {
     };
     let is_retired_word =
         |word: Option<String>| matches!(word.as_deref(), Some("deprecated" | "retired" | "disabled"));
-    if is_retired_word(state("status")) || is_retired_word(state("lifecycle")) {
+    // 参考实现写的是 `model.status ?? model.lifecycle`（**status 优先**，不是「或」）：
+    // 两者同时存在时只看 status，免得 `status:"active"` + `lifecycle:"disabled"`
+    // 这种矛盾数据被「或」判成退役。
+    if is_retired_word(state("status").or_else(|| state("lifecycle"))) {
         return true;
     }
     ["deprecated_at", "retirement_date"]
@@ -1653,7 +1677,12 @@ fn validate_model_filter(value: Option<&Value>) -> Result<String, String> {
     if text.is_empty() {
         return Ok(String::new());
     }
-    if let Some(name) = MODEL_FILTERS.iter().find(|name| **name == text) {
+    // 与读侧 `model_filter_of` 同一口径（大小写不敏感）：写侧严一点会让
+    // 「OpenCode-Free」这种能读进来的值写不出去。
+    if let Some(name) = MODEL_FILTERS
+        .iter()
+        .find(|name| name.eq_ignore_ascii_case(text))
+    {
         return Ok((*name).to_string());
     }
     Err(format!(
@@ -1730,12 +1759,15 @@ mod tests {
         );
     }
 
-    /// 目录没取到（`None`）时的退化口径：只按 id 判 —— 带 `free` 的留下，
-    /// `big-pickle` 这类无后缀的免费模型会漏（可接受，见函数头说明）。
+    /// 目录没取到（`None`）时的退化口径：带 `free` 的留下、内置白名单里的也留下
+    /// —— 后者正是为了不让 `big-pickle` 这类无后缀的免费模型被漏掉。
     #[test]
-    fn zen_free_without_catalog_falls_back_to_id_rule() {
+    fn zen_free_without_catalog_still_keeps_the_builtin_allowlist() {
         assert!(is_opencode_zen_free("mimo-v2.6-flash-free", None));
-        assert!(!is_opencode_zen_free("big-pickle", None));
+        // 无 `-free` 后缀但确属免费：目录取不到时靠内置白名单留住
+        // （参考实现同理 —— 目录失败会退回含 big-pickle 的 bootstrap 表）
+        assert!(is_opencode_zen_free("big-pickle", None));
+        assert!(is_opencode_zen_free("Big-Pickle", None), "白名单不分大小写");
         assert!(!is_opencode_zen_free("claude-opus-5", None));
         assert!(!is_opencode_zen_free("test", None));
         // SystemOne 的排除不受目录有无影响

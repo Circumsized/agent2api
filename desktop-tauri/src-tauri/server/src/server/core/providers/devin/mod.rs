@@ -178,7 +178,12 @@ impl ProviderAdapter for DevinAdapter {
                 Ok(credential) => credential,
                 Err(reason) => return ModelRefreshOutcome::failed(reason),
             };
-            let proxy = record_proxy(store, account_id);
+            // 代理写坏时不再静默直连（`record_proxy` 会给出 400 的理由）：
+            // 目录刷新这条非请求链路没有错误通道，就地折成 `failed()` 的提示。
+            let proxy = match record_proxy(store, account_id) {
+                Ok(proxy) => proxy,
+                Err(error) => return ModelRefreshOutcome::failed(error.message),
+            };
             let base = credential.server();
             let client = egress::client_for(proxy.as_ref());
             let mut body = pb::Pb::new();
@@ -378,6 +383,13 @@ impl ProviderAdapter for DevinAdapter {
                 }
             }
             if prefetched.is_empty() {
+                // 预读循环有两条出口：拿到帧就 break（流还开着，半帧校验归后面的
+                // 解码路径），或流读到尽头。走到「空」这条说明是后者 —— 此时还剩
+                // 半个帧没拼齐就是「意外 EOF」（参考实现同样抛错），不能悄悄当成
+                // 一次干净的空回答（半帧被丢掉，上层会以为是「正常但没内容」）。
+                decoder
+                    .finish()
+                    .map_err(|error| GatewayError::with_status(502, error))?;
                 // 流在没有任何内容帧之前就结束了
                 return Err(GatewayError::with_status(502, "Devin 上游回了空回答"));
             }
@@ -437,6 +449,11 @@ async fn drive_stream<S>(
 ) where
     S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin,
 {
+    // 我们主动 break 的几种情况（上游报错 / 帧解码失败 / 已见结束帧）都没走到流
+    // 尽头，这时报「提前结束」会掩盖真正的原因；只有 `while let` 自然退出（流被
+    // 读完）才该查那半个帧 —— 与参考实现在 `reader done` 且缓冲非空时抛
+    // `unexpected EOF` 是同一个判据。
+    let mut stopped_by_us = false;
     while let Some(item) = source.next().await {
         let chunk = match item {
             Ok(chunk) => chunk,
@@ -444,6 +461,7 @@ async fn drive_stream<S>(
                 let message = format!("Devin 上游流中断：{}", egress::describe_error_detail(&error));
                 telemetry.note_error(&message);
                 logging::verbose("[Devin]", &message);
+                stopped_by_us = true;
                 break;
             }
         };
@@ -452,6 +470,7 @@ async fn drive_stream<S>(
             Err(error) => {
                 telemetry.note_error(&error);
                 logging::verbose("[Devin]", &format!("帧解码失败：{error}"));
+                stopped_by_us = true;
                 break;
             }
         };
@@ -473,7 +492,16 @@ async fn drive_stream<S>(
             }
         }
         if stop {
+            stopped_by_us = true;
             break;
+        }
+    }
+    // 流读到尽头却还剩半帧：这条链路已经在下发字节、没有错误通道，就把「上游提前
+    // 结束」就地记进遥测与日志（否则它只会静默地表现为一次短回答）。
+    if !stopped_by_us {
+        if let Err(error) = decoder.finish() {
+            telemetry.note_error(&error);
+            logging::verbose("[Devin]", &format!("上游流提前结束：{error}"));
         }
     }
 }
@@ -501,16 +529,13 @@ fn event_frame(writer: &stream::ChunkWriter, event: stream::ReplyEvent) -> Strin
     }
 }
 
-/// `ChunkWriter::delta` 需要 `&mut`，这里把「按事件构 delta」与「追加首帧」收一处。
+/// 一条 delta 的分片文本（空串 = 这条不下发）。
+///
+/// 刻意不调 `ChunkWriter::delta`：那个要 `&mut`（它顺手把首帧也带上），而这里的
+/// 首帧已由调用方先发过，手上只有 `&ChunkWriter`。帧**内容**统一交给
+/// `ChunkWriter::value` 拼 —— 同一个 choice 形状不在两处各写一份，免得改一处漏一处。
 fn writer_delta(writer: &stream::ChunkWriter, delta: Value) -> String {
-    // `ChunkWriter` 的分片组装是纯拼接；这里用 `&ChunkWriter` 直接发（首帧由调用方先发过）
-    stream::sse_frame(&json!({
-        "id": writer.id(),
-        "object": "chat.completion.chunk",
-        "created": writer.created(),
-        "model": writer.model(),
-        "choices": [{ "index": 0, "delta": delta, "finish_reason": Value::Null }],
-    }))
+    stream::sse_frame(&writer.value(delta, Value::Null))
 }
 
 /// 非流式：把剩下的帧全读完，聚合成一个 `chat.completion`。
@@ -542,6 +567,11 @@ where
             apply_event(reader.consume(&frame.data), &mut content, &mut reasoning, &mut calls);
         }
         let Some(item) = source.next().await else {
+            // 流读到尽头：还剩半个帧没拼齐就是「意外 EOF」（参考实现同样抛错），
+            // 不能 break 出去当成一次干净的完成，让调用方以为拿到了完整回答。
+            decoder
+                .finish()
+                .map_err(|error| GatewayError::with_status(502, error))?;
             break;
         };
         let chunk = item.map_err(|error| {
@@ -625,19 +655,24 @@ fn account_credential(
     })?;
     let credential = credentials::Credential::from_payload(&record)
         .map_err(|reason| GatewayError::with_status(503, reason))?;
-    Ok((credential, record_proxy(store, account_id)))
+    Ok((credential, record_proxy(store, account_id)?))
 }
 
-/// 解析账号自己配的代理（解析失败不静默降级成直连）。
+/// 账号自己配的代理，口径与 codearts 的同名函数一致：**解析失败就报错**，
+/// 不静默降级成直连（直连出不了内网机器的话，用户只会看到「上游超时」，而不是
+/// 「你配的代理解析不了」；写坏的代理还会让请求绕开它、从源 IP 直接出去）。
 fn record_proxy(
     store: &AccountStore,
     account_id: &str,
-) -> Option<crate::server::core::proxies::ResolvedProxy> {
-    let record = store.devin_account_record(account_id)?;
+) -> Result<Option<crate::server::core::proxies::ResolvedProxy>, GatewayError> {
+    let record = store.devin_account_record(account_id).ok_or_else(|| {
+        GatewayError::with_status(503, "没有可用的 Devin 账号：请在账号页添加并启用账号")
+    })?;
     use crate::server::core::proxies::ProxyResolution;
     match crate::server::core::proxies::resolve_account_proxy(record.get("proxy")) {
-        Some(ProxyResolution::Resolved(proxy)) => Some(proxy),
-        _ => None,
+        Some(ProxyResolution::Resolved(proxy)) => Ok(Some(proxy)),
+        Some(ProxyResolution::Failed(reason)) => Err(GatewayError::with_status(400, reason)),
+        None => Ok(None),
     }
 }
 

@@ -426,6 +426,12 @@ fn noted(text: &str) -> (usize, String) {
         return (0, text.to_string());
     };
     let body = &text[start + MARKER.len()..tail_start];
+    // 参考实现那边的正则写的是 `... they) follows? in ...`：分组与 `follows?`
+    // 之间**留了一个空格**，所以 body 实际是 `"3 images; they "` / `"an image; it "`
+    //（tail 是尾随空格）。不 trim 的话下面两条判据恒失败，`noted` 永远返回 0 ——
+    // 结果正文里那句注记摘不掉、工具回传的图片也永远回挂不到 tool 消息上，
+    // 整条 results / settle_results 链会静默变成死代码。
+    let body = body.trim_end();
     let count = if plural {
         let Some(rest) = body.strip_suffix(" images; they") else {
             return (0, text.to_string());
@@ -512,7 +518,7 @@ fn join_split_calls(messages: &[Value]) -> Vec<Value> {
 /// `argsOf`：工具的调用参数归一成一段 JSON 对象文本。
 fn args_of(value: Option<&Value>) -> String {
     match value {
-        Some(Value::Object(_)) => value.unwrap().to_string(),
+        Some(object @ Value::Object(_)) => object.to_string(),
         Some(Value::String(text)) => parse_object(text),
         None => "{}".to_string(),
         Some(Value::Null) => "{}".to_string(),
@@ -1390,5 +1396,77 @@ mod tests {
         );
         assert!(format_text(None).is_empty());
         assert!(format_text(Some(&json!({ "type": "text" }))).is_empty());
+    }
+
+    #[test]
+    fn noted_reads_the_marker_and_strips_the_blank_line_before_it() {
+        //! 回归：参考实现的正则是 `... they) follows? in ...`，分组与 `follows?` 之间
+        //! **有空格**，所以标记与后缀之间的 body 带尾随空格。曾经不 trim → 两条判据
+        //! 恒失败 → `noted` 永远返回 0 → 注记摘不掉、工具图片回挂整条链变死代码。
+        let (count, body) = noted(
+            "cards\n\n[The tool returned 2 images; they follow in the next message.]",
+        );
+        assert_eq!(2, count);
+        assert_eq!("cards", body, "标记前的空行也要一起摘掉");
+
+        // 单数形态
+        let (count, body) = noted("[The tool returned an image; it follows in the next message.]");
+        assert_eq!(1, count);
+        assert_eq!("", body);
+
+        // 与这套标记无关的正文原样返回
+        let (count, body) = noted("nothing to see here");
+        assert_eq!(0, count);
+        assert_eq!("nothing to see here", body);
+    }
+
+    #[test]
+    fn noted_to_result_for_to_settle_strips_the_note_and_keeps_images() {
+        //! 三件套的联动：`noted` 读出「有几张图跟随」→ `result_for` 认出这是哪个刚发出
+        //! 的工具结果 → `settle_results` 在图片齐了之后把注记从正文里摘掉。`noted` 曾经
+        //! 恒返回 0（body 带尾随空格），这条链会整条静默失效：注记留在结果正文里，
+        //! 工具回传的图片也回挂不上。
+        const MARKED: &str =
+            "img-1\n\n[The tool returned 2 images; they follow in the next message.]";
+        let (said_n, said_text) = noted(MARKED);
+        assert_eq!(2, said_n);
+        assert_eq!("img-1", said_text);
+
+        let mut msgs = vec![OutMsg {
+            role: ROLE_TOOL,
+            text: MARKED.to_string(),
+            calls: Vec::new(),
+            call_id: "call_1".to_string(),
+            images: Vec::new(),
+        }];
+        let header = format!("{FROM}tool call call_1:]");
+
+        // ① 图片还没回来（`seen < said_n`）：`result_for` 认得出这条抬头，注记先留着
+        let mut results = vec![ResultEntry {
+            msg_index: 0,
+            id: "call_1".to_string(),
+            said_n,
+            said_text: said_text.clone(),
+            seen: 0,
+        }];
+        assert_eq!(Some(0), result_for(&header, &results));
+        settle_results(&mut msgs, &mut results);
+        assert!(
+            msgs[0].text.contains("[The tool returned"),
+            "图片没齐就不该摘注记"
+        );
+
+        // ② 两张都回来了（`seen == said_n`）：注记摘掉，正文只剩结果本身
+        let mut results = vec![ResultEntry {
+            msg_index: 0,
+            id: "call_1".to_string(),
+            said_n,
+            said_text,
+            seen: 2,
+        }];
+        // 已经结算过的条目不再命中 `result_for`（它只服务「还差图片」的那条）
+        assert_eq!(None, result_for(&header, &results));
+        settle_results(&mut msgs, &mut results);
+        assert_eq!("img-1", msgs[0].text, "图片齐了就该把注记摘掉");
     }
 }

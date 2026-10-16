@@ -298,7 +298,7 @@ impl ChunkWriter {
         &self.model
     }
 
-    fn value(&self, delta: Value, finish: Value) -> Value {
+    pub(super) fn value(&self, delta: Value, finish: Value) -> Value {
         json!({
             "id": self.id,
             "object": "chat.completion.chunk",

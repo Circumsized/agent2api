@@ -888,9 +888,13 @@ pub struct ListedModel {
     pub efforts: Vec<&'static str>,
     /// 收不收图（`None` = Devin 没说，前端按「没说」处理）
     pub image: Option<bool>,
-    /// 该条目代表的所有变体都是「额度不计」
+    /// 该条目代表的所有变体都是「额度不计」。
+    ///
+    /// 目录接口会给出它（[`parse_free`]），但**当前没有消费者**：`list_values` 不下发
+    /// 免费 / 标价字段（方案明确不做余额）。留着是为了与参考实现的解析保持同构，
+    /// 将来要出「免费标记」时有现成字段可用 —— 真要出，记得连 [`list_values`] 一起改。
     pub free: bool,
-    /// 各变体标价一致时的标价（`None` = 不一致或没标价）
+    /// 各变体标价一致时的标价（`None` = 不一致或没标价）。同样**当前无消费者**。
     pub cost: Option<Value>,
 }
 

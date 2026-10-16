@@ -29,21 +29,17 @@ pub const MODEL_CONFIGS_RPC: &str = "/exa.api_server_pb.ApiServerService/GetCliM
 pub const USER_STATUS_RPC: &str = "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 /// 请求自报的 CLI 版本（同时决定上游回哪一档模型清单）
 pub const CLI_VERSION: &str = "3000.11.3";
-/// CLI 登录态的默认 webapp 主机（credentials.toml 的 `devin_webapp_host`）
-pub const DEFAULT_WEBAPP_HOST: &str = "app.devin.ai";
-/// CLI 登录态的默认 API 基址（credentials.toml 的 `devin_api_url`）
-pub const DEFAULT_API_URL: &str = "https://api.devin.ai";
-
-/// CLI 自报的操作系统名（`"windows"` / `"linux"` / `"macos"`）。
+/// CLI 自报的操作系统名（`"windows"` / `"linux"` / `"darwin"`）。
 ///
-/// 与参考实现的 `osName()` 逐字一致：Windows 归 `windows`，macOS 归 `macos`
-/// （Node 的 `process.platform` 就是 `darwin`，参考实现只对 win32 特判），
-/// 其余一律 `linux`。
+/// 取参考实现 `osName()` 的口径：它把 Node 的 `process.platform` 直接报上去
+/// （只对 win32 特判），而 `process.platform` 在 macOS 上就是 `"darwin"`。
+/// 这里跟着报 `darwin` —— 上游据此分流，报一个它没见过的 `"macos"` 等于自造
+/// 协议差异。
 pub fn os_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"
     } else if cfg!(target_os = "macos") {
-        "macos"
+        "darwin"
     } else {
         "linux"
     }

@@ -154,12 +154,26 @@ pub fn fields(bytes: &[u8]) -> Vec<Field> {
                 let Some(length) = read_uvarint(bytes, &mut index) else {
                     break;
                 };
-                let length = length as usize;
-                if index + length > bytes.len() {
+                // 长度是 10 字节 varint 编出来的（上界 u64::MAX）。这里必须**分两步**
+                // 挡：先按 u64 直接比（长度本身可能大得离谱），再用 checked_add 求终点。
+                // 直接写 `index + length` 的话，release 默认关溢出检查，加法会回绕成
+                // 一个小数从而骗过守卫，紧接着 `bytes[index..index + length]` 因
+                // start > end 直接 panic（本仓 release 是 panic=abort，上游一枚畸形帧
+                // 就能放倒整个网关进程）。参考实现用 JS 浮点比较，天生不回绕 ——
+                // 这是移植过来必须自己补的一道（Code Complete Ch.8：边界校验要对
+                // 未信任输入成立）。
+                if length > bytes.len() as u64 {
                     break;
                 }
-                field.data = bytes[index..index + length].to_vec();
-                index += length;
+                let length = length as usize;
+                let Some(end) = index.checked_add(length) else {
+                    break;
+                };
+                if end > bytes.len() {
+                    break;
+                }
+                field.data = bytes[index..end].to_vec();
+                index = end;
             }
             5 => {
                 if index + 4 > bytes.len() {
@@ -284,11 +298,26 @@ impl FrameDecoder {
 
 /// gzip 解压一个帧载荷（Connect 允许逐帧压缩）。
 fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut decoder = flate2::read::GzDecoder::new(data);
+    gunzip_capped(data, MAX_FRAME_BYTES + 1)
+}
+
+/// `cap` 是**解压之后**的字节上限，达到即判压缩炸弹。
+///
+/// 别和上面那条 `MAX_FRAME_BYTES` 混了：那条挡的是**压缩前**的长度前缀，两者不是
+/// 一回事 —— 64 MiB 的压缩载荷可以膨胀到几 GiB，只限压缩侧等于没限。参考实现的
+/// `gunzipSync` 同样没挡，但本仓既然专门设了压缩上限，就不该只挡一半。
+///
+/// 拆成带 `cap` 的形态只是为了让「超限」这条分支**可测**（真造一个 64 MiB 的
+/// 用例跑不动）。
+fn gunzip_capped(data: &[u8], cap: usize) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    decoder
+    flate2::read::GzDecoder::new(data)
+        .take(cap as u64)
         .read_to_end(&mut out)
         .map_err(|error| format!("Connect 帧 gzip 解压失败: {error}"))?;
+    if out.len() >= cap {
+        return Err("Connect 帧解压后超限（疑似压缩炸弹）".to_string());
+    }
     Ok(out)
 }
 
@@ -348,6 +377,35 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_length_prefix_does_not_wrap_the_guard() {
+        //! 回归（曾是可被上游触发的 panic）：长度前缀是 10 字节 varint，上界 u64::MAX。
+        //! 老写法 `index + length > bytes.len()` 是 usize 加法，release 默认关溢出检查
+        //! 会回绕成 10（≤13）从而骗过守卫，随后 `bytes[11..11+len]` 因 start > end
+        //! 直接 panic —— 而 release 是 panic=abort，上游一枚畸形帧就能放倒整个进程。
+        let mut bytes = vec![(2 << 3) | 2];
+        for _ in 0..9 {
+            bytes.push(0xff); // 前 9 个变长字节都带续位
+        }
+        bytes.push(0x01); // 第 10 字节收尾 → 长度 = u64::MAX
+        bytes.push(b'a');
+        bytes.push(b'b');
+        // 既不能 panic，也不能把半条字段当数据切出来
+        assert!(fields(&bytes).is_empty(), "超长前缀必须整条丢弃");
+    }
+
+    #[test]
+    fn a_length_prefix_past_the_end_is_dropped() {
+        //! 正常范围内的越界长度：字段头说 8 字节、实际只剩 2 字节 → 丢这条、保前面。
+        let mut pb = Pb::new();
+        pb.str(1, "keep me");
+        let mut bytes = pb.done();
+        bytes.extend_from_slice(&[(2 << 3) | 2, 8, b'a', b'b']);
+        let parsed = fields(&bytes);
+        assert_eq!(1, parsed.len());
+        assert_eq!("keep me", String::from_utf8(parsed[0].data.clone()).unwrap());
+    }
+
+    #[test]
     fn fixed32_float_is_little_endian() {
         let mut pb = Pb::new();
         pb.uvarint((2 << 3) | 5);
@@ -384,6 +442,20 @@ mod tests {
         assert_eq!(2, frames.len());
         assert!(!frames[0].end);
         assert!(frames[1].end);
+    }
+
+    #[test]
+    fn a_gzip_bomb_is_rejected_by_the_decompressed_cap() {
+        //! `MAX_FRAME_BYTES` 挡的是**压缩前**的长度前缀；解压后同样要有上限，
+        //! 否则 64 MiB 的帧可以膨胀成几 GiB（OOM）。这里用一个小 cap 验证那条分支。
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+        let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&vec![0u8; 4096]).unwrap();
+        let gz = encoder.finish().unwrap();
+        assert!(gz.len() < 4096, "前提：这段载荷本身是可压缩的");
+        assert!(gunzip_capped(&gz, 64).is_err(), "解压后超过上限必须报错");
+        assert!(gunzip_capped(&gz, 8192).is_ok(), "上限之内照常解压");
     }
 
     #[test]

@@ -1280,6 +1280,17 @@ pub async fn refresh_account(state: &ServerState, body: &Bytes) -> Response {
     if state.store().antigravity_account_record(&id).is_some() {
         return refresh_provider_account(state, &id, ProviderKind::Antigravity).await;
     }
+    // Devin：同样**没有刷新机制**（会话令牌不按周期过期、上游无 refresh 接口，
+    // 见 `providers::devin` 与 `core::login::devin` 的模块头）。不显式拦下的话
+    // 会落到下面的 workbuddy 兜底链路，用户会收到一条与腾讯鉴权端点相关的错
+    // —— 与 CatPaw / MonkeyCode / Command Code 漏登记时的症状同一性质。
+    if state.store().devin_account_record(&id).is_some() {
+        return management_error(
+            400,
+            "Devin 的登录态没有刷新机制（会话令牌不按周期过期、上游无续期接口）：\
+             请在浏览器重新走一次网页登录，或重新导入本机 devin CLI 的 credentials.toml",
+        );
+    }
     // WorkBuddy 系（国内版 / 国际版）的兜底：两条链路都按**账号自己的**
     // endpoint / prefixPath / platform / edition 续期
     // （`AuthService::refresh_account_inner` 从记录里读，见那里的说明），

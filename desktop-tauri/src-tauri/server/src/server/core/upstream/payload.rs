@@ -180,8 +180,13 @@ pub(super) fn send_body<'a>(
     // 上游真名）由 `providers::custom::forward` 的 systemone 分支完成（本函数对
     // 自定义 id 的模型名改写本就是零改写，与下面 `wire_target_for_provider` 的
     // 说明一致）。`wire_model` 只作占位（自定义家的冷却键由编排层另算）。
-    if crate::server::core::custom_providers::protocol_of(provider_id).as_deref()
-        == Some(crate::server::core::custom_providers::PROTOCOL_SYSTEMONE)
+    //
+    // 前缀先短路：`protocol_of` 会走到 `config::current()`，那里**每次都克隆整份
+    // raw**（含提示词全文，见 `config` 模块头对热路径的说明）；内置家占绝大多数
+    // 流量，不该为判这一条付那次克隆。
+    if provider_id.starts_with(crate::server::core::custom_providers::ID_PREFIX)
+        && crate::server::core::custom_providers::protocol_of(provider_id).as_deref()
+            == Some(crate::server::core::custom_providers::PROTOCOL_SYSTEMONE)
     {
         let wire_model = ctx
             .body
