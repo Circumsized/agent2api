@@ -115,11 +115,12 @@
       // 免费额度（首发 25M tokens；AMD AI Developer Program 的 $50 / 90 天
       // Fireworks 额度）经 developer.amd.com/member-perks 领取，Key 在
       // app.fireworks.ai 申请。
-      // **图标是自绘的中性占位，不是 AMD 商标**：这张图由脚本生成（深色圆角块 +
-      // 白色字母 A，128×128 RGBA，见 `assets/providers/amd.png`），因为它只在一
-      // 13px 的徽章里出现，而抓取官方素材需要出网（离线环境拿不到）。**有官方
-      // Logo 后直接覆盖同名文件即可，本行不用改。** 刻意不去"画一枚像 AMD 徽标
-      // 的图"，那等于伪造商标 —— 宁可给一个一眼看得出是占位的字母块。
+      // **图标用的是 AMD 官方 ISO 标识（那枚方形箭头 mark）**，取自用户提供的官方
+      // logo 图（白字 + 黑底的 227×106 wordmark）。这里**只裁出右侧那枚方形标识、
+      // 不做任何变形**，再等比放大居中放进 128×128 的黑底方图 —— 卡片图标只出现在
+      // 13px 徽章里，整条 4:1 的 wordmark 塞进方形会缩到 2~3px 高、根本认不出
+      //（本仓对另一个家也因「13px 里会糊」换过变体）。保留黑底：原图本就是黑底，
+      // 且深浅两个主题下都看得见。见 `assets/providers/amd.png`。
       // **不带 models**：Fireworks 有 OpenAI 兼容的 `GET /inference/v1/models`，
       // 模型清单走「获取模型」现场拉，不预置一份很快过期的硬编码清单。
       key: 'amd-fireworks', name: 'AMD (Fireworks)', icon: 'amd.png',
