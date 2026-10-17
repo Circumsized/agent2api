@@ -57,6 +57,7 @@ use serde_json::{json, Map, Value};
 use crate::server::core::account_store::AccountStoreError;
 use crate::server::core::auth::WorkBuddyAuthError;
 use crate::server::core::billing::checkin;
+use crate::server::core::custom_providers;
 use crate::server::core::proxies::ProxyConfigError;
 use crate::server::core::providers::adapter::adapter_for;
 use crate::server::core::providers::zcode;
@@ -267,6 +268,10 @@ pub async fn dispatch(
         }
         // 账号级活跃连接数（账号页「连接数」列；见 `core::upstream::connections`）
         ("GET", "connections") => return account_connections(&state),
+        // 自定义账号测活（账号页 ⋯ 菜单的「测活」）：用该账号自己的 Key 打一次上游
+        // `/models`。登记在固定子路径（走 body 里的 id，不做路径段）—— 与 batch /
+        // refresh 同一形制；`/api/accounts/{*rest}` 已挂 protected，鉴权与同族一致。
+        ("POST", "test") => return test_account(&state, body).await,
         ("POST", "checkin") => return accounts_checkin(&state, body).await,
         _ => {}
     }
@@ -1429,6 +1434,97 @@ pub fn account_connections(state: &ServerState) -> Response {
     ok_json(json!({ "counts": Value::Object(counts) }))
 }
 
+// ─── POST /api/accounts/test ────────────────────────────────
+
+/// 自定义账号**测活**：用这条账号自己的凭证打一次上游的 `/models`（anthropic 的
+/// `/v1/models`），把「通不通」当场回报给界面。
+///
+/// ── 为什么放在账号族里 ────────────────────────────────────
+/// 它测的是**一条账号的凭证**，与余额查询（`GET /api/accounts/usage`）同一层 ——
+/// 都是「读这条账号的凭证、替它出一次网」。载荷因此与 refresh / batch 同形
+/// （`id` 走 body，不做路径段）。
+///
+/// ── 只服务自定义提供商 ───────────────────────────────────
+/// 内置家的凭证是登录态（JWT / session / 各自一套刷新链），没有可拿来做一次轻量
+/// 鉴权探测的通用 `/models`（各家的清单来源与鉴权头都不一样）。对内置账号明确
+/// 报 400 并说明做法，而不是猜一个端点去打 ——「账号不存在」与「不是自定义家」
+/// 分开报（与 `patch_account` 的 balanceToken 段同一口径）。
+///
+/// ── 恒 200 的响应 ────────────────────────────────────────
+/// 探活失败（401 / 连不上）是**测活得到的结论**而不是这次请求失败 —— 与
+/// `/api/proxies/test` 同一口径：前端按 `data.ok` 渲染成败，不把一次「测出坏 key」
+/// 当成接口报错（否则壳侧 `unwrap_envelope` 会把它当 Err 抛出，前端拿不到
+/// status / latencyMs）。
+pub async fn test_account(state: &ServerState, body: &Bytes) -> Response {
+    let payload = match parse_json_body(body, "请求内容不是有效 JSON") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if id.is_empty() {
+        return management_error(400, "缺少账号 id");
+    }
+    // 判据与 refresh_account / patch_account 同款：`custom_account_provider` 一次
+    // 回答「账号在不在、属不属于自定义家」；不在时再区分「不存在」与「不是自定义家」
+    let Some(provider_id) = state.store().custom_account_provider(&id) else {
+        return if account_exists(state, &id) {
+            management_error(
+                400,
+                "只有自定义提供商的账号支持测活（内置家请用「刷新 Token」或直接转发验证）",
+            )
+        } else {
+            store_error(AccountStoreError::new("账号不存在", 404))
+        };
+    };
+    let Some(credential) = state.store().custom_credential_by_id(&id) else {
+        return store_error(AccountStoreError::new("账号不存在", 404));
+    };
+    logging::verbose("[Accounts]", &format!("测活账号 {id}（{provider_id}）"));
+    let probe = custom_providers::probe_account(&provider_id, &credential).await;
+    logging::log(
+        "[Accounts]",
+        &format!(
+            "{} 账号测活: {id}（{}ms）{}",
+            if probe.ok { "✅" } else { "❌" },
+            probe.latency_ms,
+            probe.message
+        ),
+    );
+    ok_json(probe_response(&id, &probe))
+}
+
+/// 测活结果 → 响应 data。抽成纯函数只为可单测（形状是前端契约：ui-islands 的
+/// accounts-data.ts 读 `{ ok, status, latencyMs, message }`）。
+fn probe_response(id: &str, probe: &custom_providers::AccountProbe) -> Value {
+    json!({
+        "id": id,
+        "ok": probe.ok,
+        "status": probe.status,
+        "latencyMs": probe.latency_ms,
+        "message": probe.message,
+    })
+}
+
+/// 账号是否存在于全量列表（用于把「不存在」与「不是自定义家」分开报）。
+fn account_exists(state: &ServerState, id: &str) -> bool {
+    state
+        .store()
+        .list_accounts()
+        .get("accounts")
+        .and_then(Value::as_array)
+        .map(|accounts| {
+            accounts
+                .iter()
+                .any(|item| item.get("id").and_then(Value::as_str) == Some(id))
+        })
+        .unwrap_or(false)
+}
+
 // ─── PATCH /api/accounts/{id} ───────────────────────────────
 
 pub async fn patch_account(state: &ServerState, id: &str, body: &Bytes) -> Response {
@@ -1711,5 +1807,41 @@ pub fn delete_account(state: &ServerState, id: &str) -> Response {
             ok_json(json!({ "list": state.store().list_accounts() }))
         }
         Err(error) => store_error(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测活响应的形状是**前端契约**（ui-islands 的 accounts-data.ts 读这四个键）：
+    /// 成功与失败两种形态都要稳定 —— 尤其 `status` 缺省时必须序列化成 `null`
+    /// （连不上上游 / SystemOne 没有 `/models`，此时没有状态码可比），不能因为它是
+    /// `Option` 就把键整个丢掉（前端固定读 `data.status`）。
+    #[test]
+    fn probe_response_shape_is_stable() {
+        let ok = custom_providers::AccountProbe {
+            ok: true,
+            status: Some(200),
+            latency_ms: 42,
+            message: "上游返回 200，凭证可用".to_string(),
+        };
+        let value = probe_response("custom-acct-1", &ok);
+        assert_eq!(value["id"], "custom-acct-1");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["status"], 200);
+        assert_eq!(value["latencyMs"], 42);
+        assert_eq!(value["message"], "上游返回 200，凭证可用");
+
+        let failed = custom_providers::AccountProbe {
+            ok: false,
+            status: None,
+            latency_ms: 0,
+            message: "上游请求失败".to_string(),
+        };
+        let value = probe_response("x", &failed);
+        assert_eq!(value["ok"], false);
+        assert!(value["status"].is_null());
+        assert_eq!(value["latencyMs"], 0);
     }
 }

@@ -108,6 +108,22 @@
       hint: wbI18n.t('NVIDIA NIM 托管端点，Key 在 integrate.api.nvidia.com 申请'),
     },
     {
+      // AMD（Fireworks）—— AMD 的开发者 LLM API 是**白标 Fireworks**：
+      // 「AMD AI Endpoint APIs, powered by Fireworks AI」直接复用 Fireworks 的
+      // OpenAI 兼容端点（`https://api.fireworks.ai/inference/v1`），AMD **没有**
+      // 自有推理域名，所以这里填的是 Fireworks 的地址、hint 里如实说明。
+      // 免费额度（首发 25M tokens；AMD AI Developer Program 的 $50 / 90 天
+      // Fireworks 额度）经 developer.amd.com/member-perks 领取，Key 在
+      // app.fireworks.ai 申请。
+      // **不带 icon**：assets/providers/ 里没有 AMD 的图（不伪造商标），卡片
+      // 回落到首字母徽章「A」（见 add-provider-pick 的 Logo）。
+      // **不带 models**：Fireworks 有 OpenAI 兼容的 `GET /inference/v1/models`，
+      // 模型清单走「获取模型」现场拉，不预置一份很快过期的硬编码清单。
+      key: 'amd-fireworks', name: 'AMD (Fireworks)', protocol: P.openai,
+      baseUrl: 'https://api.fireworks.ai/inference/v1',
+      hint: wbI18n.t('AMD 开发者计划走 Fireworks AI 平台（无 AMD 自有端点），Key 在 app.fireworks.ai 申请；额度经 developer.amd.com/member-perks 领取'),
+    },
+    {
       key: 'deepseek', name: 'DeepSeek', icon: 'deepseek.png',
       protocol: P.openai, baseUrl: 'https://api.deepseek.com',
       hint: wbI18n.t('Anthropic 兼容端点在 https://api.deepseek.com/anthropic（协议换 anthropic 时填它）'),

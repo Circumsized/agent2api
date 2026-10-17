@@ -29,7 +29,7 @@
  */
 
 import {
-  errorMessage, POOL_VALUE_PREFIX, shared, toast,
+  errorMessage, esc, POOL_VALUE_PREFIX, shared, toast,
   type AccountRecord, type ClashSnapshot, type PanelKind, type PoolItem,
   type TokenReading, type UsageEntry,
 } from './accounts-shared'
@@ -792,6 +792,64 @@ export async function setGroupEnabled(ids: string[], enabled: boolean): Promise<
     toast(enabled
       ? t('✅ 已启用 {n} 个账号', { n: ids.length })
       : t('✅ 已禁用 {n} 个账号', { n: ids.length }))
+    await shared().wbApp?.refresh?.()
+  } catch (error) {
+    toast(t('操作失败：{message}', { message: errorMessage(error) }), 'err')
+    void shared().wbApp?.refresh?.()
+  }
+}
+
+/**
+ * 单条账号**测活**（账号页 ⋯ 菜单的「测活」）。
+ *
+ * 只对自定义账号出现（判据在 accounts-panels 的 MoreMenu）：内置家的凭证是登录态，
+ * 后端对它们明确回 400。`POST /api/accounts/test` **恒返回 200** + `{ ok, status,
+ * latencyMs, message }`（探活失败也是一次成功的「测活结论」，不是接口报错），因此
+ * 这里按 `data.ok` 分流播报；只有在后端/桥整体报错（账号不存在、非自定义家）时才
+ * 走 catch。
+ */
+export async function testAccountKey(id: string): Promise<void> {
+  try {
+    const data = await shared().wbProviders?.customRequest?.(
+      'POST', '/api/accounts/test', { id },
+    ) as { ok?: boolean; status?: number | null; latencyMs?: number; message?: string } | null | undefined
+    const ok = data?.ok === true
+    const latency = Number(data?.latencyMs) || 0
+    const message = String(data?.message || '')
+    const status = data?.status != null ? ` HTTP ${data.status}` : ''
+    const suffix = message ? `：${message}` : ''
+    if (ok) {
+      toast(t('✅ 测活通过{status}（{ms}ms）{message}', { status, ms: latency, message: suffix }))
+    } else {
+      toast(t('❌ 测活失败{status}（{ms}ms）{message}', { status, ms: latency, message: suffix }), 'err')
+    }
+  } catch (error) {
+    toast(t('测活失败：{message}', { message: errorMessage(error) }), 'err')
+  }
+}
+
+/**
+ * 清空某一家名下的**全部账号**（分组带 ⋯ 菜单的「清空该家的全部 Key」）。
+ *
+ * 走既有批量删除端点（`action: 'remove'`）—— 与批量弹窗里的「删除」是同一条链，
+ * 差别只是 `ids` 来自「一整组」（该 provider 名下全部账号，含被筛选隐藏的）。
+ * 不可逆，先做二次确认（与批量删除同一个 `wbConfirm.ask` 口径）。`label` 是用户
+ * 可见的家名（可能含用户输入），进 HTML 片段前必须转义（见 esc 的说明）。
+ */
+export async function clearProviderKeys(ids: string[], label: string): Promise<void> {
+  if (!ids.length) { toast(t('没有选中的账号'), 'err'); return }
+  const ok = await Promise.resolve(shared().wbConfirm?.ask?.({
+    title: t('清空「{label}」的全部 Key', { label }),
+    html: t('确定删除「{label}」名下的全部 <strong>{count}</strong> 个账号？此操作不可恢复，账号的登录态会一并移除。', {
+      label: esc(label), count: ids.length,
+    }),
+    okText: t('删除'),
+    okClass: 'danger',
+  }) ?? false)
+  if (!ok) return
+  try {
+    await shared().workbuddyDesktop?.batchAccounts?.({ action: 'remove', ids })
+    toast(t('✅ 已清空「{label}」的全部 {n} 个账号', { label, n: ids.length }))
     await shared().wbApp?.refresh?.()
   } catch (error) {
     toast(t('操作失败：{message}', { message: errorMessage(error) }), 'err')

@@ -92,6 +92,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use crate::server::config;
+use crate::server::core::account_store::custom_accounts::CustomCredential;
 use crate::server::core::account_store::AccountStore;
 use crate::server::core::capability;
 use crate::server::core::egress;
@@ -1006,6 +1007,66 @@ pub fn wire_model_for(provider_id: &str, requested_name: &str) -> (String, Optio
         .unwrap_or_else(|| (requested.to_string(), None))
 }
 
+/// 取上游模型清单的**端点**：按协议拼路径，并挡住两个没有 `/models` 的前置条件
+/// （缺 baseUrl、SystemOne 直通通道）。
+///
+/// `fetch_upstream_models`（拉清单）与 [`probe_account`]（账号测活）共用这一处 ——
+/// 两条链打的是同一个地址，各拼一次迟早会漂成「测活打了一个拉清单打不到的 URL」。
+/// 返回 `(url, protocol)`：protocol 原样带出，调用方据此决定鉴权头形态。
+fn models_endpoint(provider: &Value) -> Result<(String, String), String> {
+    let protocol = provider
+        .get("protocol")
+        .and_then(Value::as_str)
+        .unwrap_or(PROTOCOL_CHAT_COMPLETIONS)
+        .to_string();
+    let base_url = provider
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if base_url.is_empty() {
+        return Err("该提供商没有配置 baseUrl，无法拉取模型清单".to_string());
+    }
+    // SystemOne 那档上游（`…/systemone/v1`）**没有** `/models` 端点：真打过去只会
+    // 换来一条上游的 404/451，不如把话说清楚。预置卡已随卡登记好模型，无需再取。
+    if protocol == PROTOCOL_SYSTEMONE {
+        return Err(
+            "该上游是 SystemOne 直通通道，没有 /models 端点：请在「模型管理」页手动登记模型"
+                .to_string(),
+        );
+    }
+    let url = if protocol == PROTOCOL_ANTHROPIC {
+        format!("{base_url}/v1/models")
+    } else {
+        format!("{base_url}/models")
+    };
+    Ok((url, protocol))
+}
+
+/// 给「取模型清单 / 测活」的请求补鉴权头。
+///
+/// 凭证为空（无需鉴权的账号）时**一个鉴权头都不发**：空 Bearer 对严格的上游等同
+/// 凭证错误，与「这家不要凭证」的语义正好相反（见 `fetch_upstream_models` 的说明）。
+/// anthropic 用 `x-api-key` + `anthropic-version`（它的鉴权头不是 Bearer），其余用
+/// `Authorization: Bearer` —— 与 `fetch_upstream_models` 原实现逐字一致。
+fn apply_models_auth(
+    builder: reqwest::RequestBuilder,
+    protocol: &str,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return builder;
+    }
+    if protocol == PROTOCOL_ANTHROPIC {
+        builder
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+    } else {
+        builder.header("Authorization", format!("Bearer {api_key}"))
+    }
+}
+
 /// **服务端代理拉取**上游的模型清单（`POST /api/custom-providers/fetch-models`）。
 ///
 /// 为什么由网关代拉而不是浏览器直连：桌面壳的页面跑在本地 origin 上，
@@ -1042,32 +1103,9 @@ pub async fn fetch_upstream_models(
 ) -> Result<Vec<String>, String> {
     let provider = get(provider_id)
         .ok_or_else(|| format!("自定义提供商不存在: {}", provider_id.trim()))?;
-    let protocol = provider
-        .get("protocol")
-        .and_then(Value::as_str)
-        .unwrap_or(PROTOCOL_CHAT_COMPLETIONS)
-        .to_string();
-    let base_url = provider
-        .get("baseUrl")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if base_url.is_empty() {
-        return Err("该提供商没有配置 baseUrl，无法拉取模型清单".to_string());
-    }
-    // SystemOne 那档上游（`…/systemone/v1`）**没有** `/models` 端点：真打过去只会
-    // 换来一条上游的 404/451，不如把话说清楚。预置卡已随卡登记好模型，无需再取。
-    if protocol == PROTOCOL_SYSTEMONE {
-        return Err(
-            "该上游是 SystemOne 直通通道，没有 /models 端点：请在「模型管理」页手动登记模型"
-                .to_string(),
-        );
-    }
-    let url = if protocol == PROTOCOL_ANTHROPIC {
-        format!("{base_url}/v1/models")
-    } else {
-        format!("{base_url}/models")
-    };
+    // URL 与鉴权头的口径与账号测活（[`probe_account`]）共用同一对辅助函数：
+    // 两条链打的是同一个地址，各拼一次迟早会漂
+    let (url, protocol) = models_endpoint(&provider)?;
     let credential = store
         .first_custom_credential(provider_id)
         .ok_or_else(|| {
@@ -1075,21 +1113,13 @@ pub async fn fetch_upstream_models(
                 .to_string()
         })?;
     let client = egress::client_for(credential.proxy.as_ref());
-    let mut builder = client
-        .get(&url)
-        .timeout(Duration::from_millis(FETCH_MODELS_TIMEOUT_MS));
-    // 凭证为空（无需鉴权的账号）时**一个鉴权头都不发**：空 Bearer 对严格的上游
-    // 等同凭证错误，与「这家不要凭证」的语义正好相反（见函数头的说明）
-    let api_key = credential.api_key.trim();
-    if !api_key.is_empty() {
-        builder = if protocol == PROTOCOL_ANTHROPIC {
-            builder
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-        } else {
-            builder.header("Authorization", format!("Bearer {api_key}"))
-        };
-    }
+    let builder = apply_models_auth(
+        client
+            .get(&url)
+            .timeout(Duration::from_millis(FETCH_MODELS_TIMEOUT_MS)),
+        &protocol,
+        &credential.api_key,
+    );
     let response = builder.send().await.map_err(|error| {
         format!("上游请求失败: {}", egress::describe_error_detail(&error))
     })?;
@@ -1120,6 +1150,100 @@ pub async fn fetch_upstream_models(
         })
         .unwrap_or_default();
     Ok(apply_model_filter(&provider, ids).await)
+}
+
+/// 一条账号的**测活结果**（`POST /api/accounts/test` 的载荷）。
+///
+/// 字段名与前端契约逐字对齐（`ok` / `status` / `latencyMs` / `message`，
+/// 见 ui-islands 的 accounts-data.ts）。`status` 是 `Option`：连不上上游
+/// （DNS / 超时 / TLS）时没有 HTTP 状态码可比，序列化成 `null`。
+pub struct AccountProbe {
+    pub ok: bool,
+    pub status: Option<u16>,
+    pub latency_ms: u64,
+    pub message: String,
+}
+
+/// 用**一条自定义账号自己的凭证**探活：打一次它的 `GET /models`（anthropic 拼
+/// `/v1/models`），把「这把 Key 能不能过上游鉴权」当场回报给界面。
+///
+/// 为什么就复用「取模型清单」这条链路：它是**最便宜的一次真实鉴权请求** ——
+/// OpenAI 与 Anthropic 兼容端点都有 `/models`，比发一次对话请求便宜得多、也不会
+/// 被算进用量；URL 与鉴权头的口径与 [`fetch_upstream_models`] 共用
+/// [`models_endpoint`] / [`apply_models_auth`]，两条链不会漂。
+///
+/// 不支持的上游照实回报而不是假装成功：SystemOne 没有 `/models`、缺 baseUrl、
+/// 提供商记录已删 —— 这些情况 `ok=false`、`status=None`，文案直接用
+/// [`models_endpoint`] 给的那句（前端原样展示）。凭证为空（无需鉴权的账号）照旧
+/// 发请求、只是不带鉴权头：本地 Ollama 这类上游的 `/models` 本来就不校验凭证，
+/// 测活照样能回答「这台上游通不通」。
+pub async fn probe_account(provider_id: &str, credential: &CustomCredential) -> AccountProbe {
+    let fail = |status: Option<u16>, latency_ms: u64, message: String| AccountProbe {
+        ok: false,
+        status,
+        latency_ms,
+        message,
+    };
+    let provider = match get(provider_id) {
+        Some(provider) => provider,
+        None => {
+            return fail(
+                None,
+                0,
+                format!("自定义提供商不存在: {}", provider_id.trim()),
+            )
+        }
+    };
+    let (url, protocol) = match models_endpoint(&provider) {
+        Ok(value) => value,
+        Err(message) => return fail(None, 0, message),
+    };
+    let client = egress::client_for(credential.proxy.as_ref());
+    let builder = apply_models_auth(
+        client
+            .get(&url)
+            .timeout(Duration::from_millis(FETCH_MODELS_TIMEOUT_MS)),
+        &protocol,
+        &credential.api_key,
+    );
+    let started = std::time::Instant::now();
+    let response = match builder.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return fail(
+                None,
+                elapsed_ms(started),
+                format!("上游请求失败: {}", egress::describe_error_detail(&error)),
+            )
+        }
+    };
+    let status = response.status().as_u16();
+    let latency_ms = elapsed_ms(started);
+    let text = response.text().await.unwrap_or_default();
+    if !response_ok(status) {
+        let summary: String = text.trim().chars().take(200).collect();
+        return fail(
+            Some(status),
+            latency_ms,
+            if summary.is_empty() {
+                format!("上游返回 {status}")
+            } else {
+                format!("上游返回 {status}: {summary}")
+            },
+        );
+    }
+    AccountProbe {
+        ok: true,
+        status: Some(status),
+        latency_ms,
+        message: format!("上游返回 {status}，凭证可用"),
+    }
+}
+
+/// 瞬时 → 毫秒。`Instant::elapsed().as_millis()` 是 u128，耗时不可能溢出 u64，
+/// 但按全仓「非测试代码绝不 unwrap」的纪律用 `try_from` + `unwrap_or` 兜住。
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// 按记录上的 [`MODEL_FILTERS`] 收窄取回的上游模型清单；没有过滤器时原样返回。
@@ -1851,5 +1975,59 @@ mod tests {
             MODEL_FILTER_OPENCODE_FREE
         );
         assert!(validate_model_filter(Some(&json!("nonsense"))).is_err());
+    }
+
+    /// 测活与拉清单共用同一份端点口径：anthropic 拼 `/v1/models`、其余拼 `/models`、
+    /// 协议缺省按 chat_completions；缺 baseUrl / SystemOne 都在这里挡掉（两处调用
+    /// 不再各判一次，也就不会漂）。
+    #[test]
+    fn models_endpoint_switches_by_protocol_and_guards_missing_base() {
+        let anthropic = json!({
+            "protocol": PROTOCOL_ANTHROPIC,
+            "baseUrl": "https://api.example.com",
+        });
+        let (url, protocol) = models_endpoint(&anthropic).unwrap();
+        assert_eq!(url, "https://api.example.com/v1/models");
+        assert_eq!(protocol, PROTOCOL_ANTHROPIC);
+
+        let openai = json!({
+            "protocol": PROTOCOL_CHAT_COMPLETIONS,
+            "baseUrl": "https://api.example.com/v1",
+        });
+        assert_eq!(models_endpoint(&openai).unwrap().0, "https://api.example.com/v1/models");
+
+        // 协议缺省 = chat_completions（与存储层读侧同口径）
+        let defaulted = json!({ "baseUrl": "https://api.example.com/v1" });
+        assert_eq!(models_endpoint(&defaulted).unwrap().1, PROTOCOL_CHAT_COMPLETIONS);
+
+        // 缺 baseUrl / SystemOne：明确报错（探活把它当结论回报，不假装成功）
+        assert!(models_endpoint(&json!({ "protocol": PROTOCOL_CHAT_COMPLETIONS, "baseUrl": "" })).is_err());
+        assert!(models_endpoint(&json!({ "protocol": PROTOCOL_SYSTEMONE, "baseUrl": "https://x" })).is_err());
+    }
+
+    /// 鉴权头按协议分叉、空凭证一个头都不发（无鉴权上游）—— 与改造前逐字一致。
+    #[test]
+    fn models_auth_headers_follow_protocol_and_skip_empty_key() {
+        let client = reqwest::Client::new();
+        let bearer = apply_models_auth(client.get("https://x/models"), PROTOCOL_CHAT_COMPLETIONS, "sk-abc")
+            .build()
+            .unwrap();
+        assert_eq!(
+            bearer.headers().get("authorization").unwrap().to_str().unwrap(),
+            "Bearer sk-abc"
+        );
+        let anthropic = apply_models_auth(client.get("https://x/v1/models"), PROTOCOL_ANTHROPIC, "key-1")
+            .build()
+            .unwrap();
+        assert_eq!(anthropic.headers().get("x-api-key").unwrap().to_str().unwrap(), "key-1");
+        assert_eq!(
+            anthropic.headers().get("anthropic-version").unwrap().to_str().unwrap(),
+            "2023-06-01"
+        );
+        // 空凭证（无需鉴权的账号）：一个鉴权头都不发
+        let bare = apply_models_auth(client.get("https://x/models"), PROTOCOL_CHAT_COMPLETIONS, "  ")
+            .build()
+            .unwrap();
+        assert!(bare.headers().get("authorization").is_none());
     }
 }

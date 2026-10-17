@@ -54,9 +54,9 @@ import {
 import { CreditDetailButton, creditRowsOf } from './accounts-credit-detail'
 import {
   PROXY_CUSTOM_CURRENT, PROXY_CUSTOM_EDIT, applyProxyPick,
-  connectionsOf, maskName, openBatchDialog, openSettingsDialog, openZcodePlans,
+  clearProviderKeys, connectionsOf, maskName, openBatchDialog, openSettingsDialog, openZcodePlans,
   poolError, proxyPoolSnapshot, queryUsageOnce, setAccountEnabled, setGroupEnabled, setPanelOpen,
-  tokenUsageOf, toggleGroupCollapsed, toggleNamesHidden, usageEntryOf, usageFailureOf,
+  testAccountKey, tokenUsageOf, toggleGroupCollapsed, toggleNamesHidden, usageEntryOf, usageFailureOf,
 } from './accounts-data'
 import type { AccountGroup } from './accounts-domain'
 import { PROVIDER_ICONS } from './add-provider-pick'
@@ -112,6 +112,10 @@ export function OrderCell({ account, rank }: { account: AccountRecord; rank: num
 function GroupMenu({ group, ids, collapsed }: { group: AccountGroup; ids: string[]; collapsed: boolean }) {
   const [open, setOpen] = React.useState(false)
   const itemClass = 'w-full justify-start px-2 font-normal'
+  // 「清空该家的全部 Key」只对**自定义提供商**（含预置卡建的家）出现：内置家的凭证
+  // 是登录态（不是「Key」），逐条删除走批量弹窗；这一项的动作实际是**派生的**批量
+  // 删除（见 clearProviderKeys），所以门控在这一层而不是后端。
+  const isCustom = group.provider.startsWith('custom-')
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={<button type='button' className='grp-iconbtn' title={t('本组操作')} />}>⋯</PopoverTrigger>
@@ -137,6 +141,20 @@ function GroupMenu({ group, ids, collapsed }: { group: AccountGroup; ids: string
             onClick={() => { setOpen(false); toggleGroupCollapsed(group.provider) }}>
             {collapsed ? t('展开这一组') : t('折叠这一组')}
           </Button>
+          {/* 清空这一家名下**全部**账号（含被筛选隐藏的）—— provider 范围内的一键动作，
+              与逐条删除／批量弹窗的「删除」是同一条后端链（POST /api/accounts/batch
+              {action:'remove'}）。不可逆，二次确认在 clearProviderKeys 里。 */}
+          {isCustom ? (
+            <>
+              <div className='my-1 h-px bg-hairline' />
+              <Button variant='ghost' size='sm'
+                className={`${itemClass} text-destructive hover:text-destructive`}
+                title={t('删除这一家名下的全部账号（含被筛选隐藏的），一次清空这家所有 Key')}
+                onClick={() => { setOpen(false); void clearProviderKeys(ids, group.label) }}>
+                {t('清空该家的全部 Key（{n}）', { n: ids.length })}
+              </Button>
+            </>
+          ) : null}
         </div>
       </PopoverContent>
     </Popover>
@@ -1443,6 +1461,9 @@ export function MoreMenu({ account, atFront }: { account: AccountRecord; atFront
   const maxConcurrent = Number(account.maxConcurrent) || 0
   const itemClass = 'w-full justify-start px-2 font-normal'
   const dangerClass = `${itemClass} text-destructive hover:text-destructive`
+  // 测活只对**自定义提供商**的账号给出：内置家的凭证是登录态、后端没有通用的
+  // `/models` 探针（后端对内置账号直接回 400），所以这里按 provider 前缀隐藏。
+  const isCustom = providerOf(account).startsWith('custom-')
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -1463,6 +1484,13 @@ export function MoreMenu({ account, atFront }: { account: AccountRecord; atFront
             onClick={() => { setOpen(false); openSettingsDialog(account.id) }}>
             {t('并发上限：{value}', { value: maxConcurrent > 0 ? maxConcurrent : t('不限') })}
           </Button>
+          {isCustom ? (
+            <Button variant='ghost' size='sm' className={itemClass}
+              title={t('用这条账号自己的 Key 打一次上游 /models，检查它是否还能用')}
+              onClick={() => { setOpen(false); void testAccountKey(account.id) }}>
+              {t('测活')}
+            </Button>
+          ) : null}
           {account.hasRefreshToken ? (
             <Button variant='ghost' size='sm' className={itemClass}
               onClick={() => { setOpen(false); shared().wbApp?.runAccountAction?.('refresh', account.id) }}>

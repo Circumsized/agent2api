@@ -31,6 +31,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Textarea,
 } from '@ui'
 
 import {
@@ -76,6 +77,45 @@ const CALL_URLS: Record<string, string> = {
   responses: '/v1/responses',
   anthropic: '/v1/messages',
   systemone: '/v1/systemone',
+}
+
+/**
+ * 把多行 Key 输入拆成**一把把 Key**：按行切、trim、丢空行，并按小写去重。
+ *
+ * 一张卡（新建）与「加入已有」两条链共用它：一次粘贴多把 Key ⇒ 逐把建成**独立
+ * 账号**（存储层「一条账号 = 一把 apiKey」，见 custom_accounts 的模块头）。小写去重
+ * 是为了同一把 Key 重复粘贴时只建一条（后端也按 key 摘要合并，这里先去重能省一次
+ * 请求、也让「重复」计数如实报出来）。
+ *
+ * 返回 `keys` 是**保原样**的去重结果（落库用，Key 大小写敏感），`duplicates` 是被
+ * 丢掉的重复行数（用于汇总提示）。单行输入 ⇒ `keys.length === 1` ⇒ 与改造前的单
+ * Key 行为逐字一致。
+ */
+function parseApiKeys(raw: string): { keys: string[]; duplicates: number } {
+  const seen = new Set<string>()
+  const keys: string[] = []
+  let duplicates = 0
+  for (const line of raw.split(/\r?\n/)) {
+    const key = line.trim()
+    if (!key) continue
+    const marker = key.toLowerCase()
+    if (seen.has(marker)) { duplicates += 1; continue }
+    seen.add(marker)
+    keys.push(key)
+  }
+  return { keys, duplicates }
+}
+
+/**
+ * 多把 Key 那条链的汇总尾注：「（N 把重复、M 把添加失败）」，都没有时给空串。
+ * 只在一次添加多把 Key 时出现 —— 单把保持既有文案（不改旧键，也就不会让旧译文
+ * 变孤儿）。
+ */
+function keySummaryTail(duplicates: number, failed: number): string {
+  const notes: string[] = []
+  if (duplicates > 0) notes.push(t('{n} 把重复', { n: duplicates }))
+  if (failed > 0) notes.push(t('{n} 把添加失败', { n: failed }))
+  return notes.length ? t('（{notes}）', { notes: notes.join(t('、')) }) : ''
 }
 
 const PROTOCOL_ID = 'custom-protocol-select'
@@ -414,20 +454,30 @@ export function CustomProviderBlock({
           </div>
           <div className='add-field'>
             <Label htmlFor={APIKEY_ID}>API Key</Label>
-            <Input
+            {/* 多行文本域：一行一把 Key（见 parseApiKeys）。改用 textarea 的代价是
+                Key 在录入时**明文可见**（<textarea> 无法像 password 输入那样遮挡）——
+                这是「一次粘贴多把」必须付出的取舍，本机桌面端可接受。 */}
+            <Textarea
               id={APIKEY_ID}
-              type='password'
-              autoComplete='new-password'
+              rows={3}
+              autoComplete='off'
               placeholder='sk-…'
+              className='min-h-[60px]'
               // 勾了「无需鉴权」就没有 key 可填（后端也按互斥归一：两个字段
               // 只能有一个成立，见 custom_accounts::add_custom_account）
               disabled={noAuth}
               {...draftProps(APIKEY_ID)}
             />
             <span className='hint'>
-              {noAuth
-                ? t('不需要 Key：转发与拉取模型都不发送鉴权头')
-                : t('上游不要鉴权时留空，并勾选下面一项（留空又不勾会被当成未配置凭证）')}
+              {noAuth ? (
+                t('不需要 Key：转发与拉取模型都不发送鉴权头')
+              ) : (
+                <>
+                  {t('每行一把 Key，可一次粘贴多把：逐把建为独立账号，同一家多把轮换。')}
+                  <br />
+                  {t('上游不要鉴权时留空，并勾选下面一项（留空又不勾会被当成未配置凭证）')}
+                </>
+              )}
             </span>
           </div>
           <NoAuthCheckbox
@@ -470,18 +520,26 @@ export function CustomProviderBlock({
           </div>
           <div className='add-field'>
             <Label htmlFor={EXISTING_APIKEY_ID}>API Key</Label>
-            <Input
+            {/* 与新建模式同一手法：一行一把 Key，可一次粘贴多把 */}
+            <Textarea
               id={EXISTING_APIKEY_ID}
-              type='password'
-              autoComplete='new-password'
+              rows={3}
+              autoComplete='off'
               placeholder='sk-…'
+              className='min-h-[60px]'
               disabled={existingNoAuth}
               {...draftProps(EXISTING_APIKEY_ID)}
             />
             <span className='hint'>
-              {existingNoAuth
-                ? t('不需要 Key：转发与拉取模型都不发送鉴权头')
-                : t('上游不要鉴权时留空，并勾选下面一项（留空又不勾会被当成未配置凭证）')}
+              {existingNoAuth ? (
+                t('不需要 Key：转发与拉取模型都不发送鉴权头')
+              ) : (
+                <>
+                  {t('每行一把 Key，可一次粘贴多把：逐把建为独立账号，同一家多把轮换。')}
+                  <br />
+                  {t('上游不要鉴权时留空，并勾选下面一项（留空又不勾会被当成未配置凭证）')}
+                </>
+              )}
             </span>
           </div>
           <NoAuthCheckbox
@@ -531,11 +589,14 @@ async function submitCreate(context: FootContext): Promise<void> {
   const name = readField(NAME_ID)
   const protocol = readField(PROTOCOL_ID) || protocolOptions()[0].value
   const baseUrl = readField(BASEURL_ID)
-  const apiKey = readField(APIKEY_ID)
+  const rawKeys = readField(APIKEY_ID)
   const noAuth = readNoAuthDraft(NOAUTH_ID)
   // 必填拦截在本地先做一次（弹窗不是 <form>，原生 required 不生效）
   if (!name) { toast(t('请填写名称'), 'err'); return }
   if (!baseUrl) { toast(t('请填写 Base URL'), 'err'); return }
+  // 一行一把 Key：去重后逐把建成**独立账号**（存储层一条账号 = 一把 apiKey）。
+  // 单行输入 ⇒ keys.length === 1 ⇒ 与改造前的单 Key 行为逐字一致。
+  const { keys, duplicates } = parseApiKeys(rawKeys)
   await runSubmit(context.setBusy, async () => {
     const payload: Record<string, unknown> = { name, protocol, baseUrl }
     // 预置家的上游特判随记录写入（转发层按这些字段修正请求，见 preset-providers.js 的 quirks）
@@ -563,20 +624,46 @@ async function submitCreate(context: FootContext): Promise<void> {
     // 查询凭证（该方案要的那份；没有字段的家在这里恒为 null）
     const balanceQuery = readBalanceQuery(scheme, BALANCE_CREATE_PREFIX)
     if (balanceQuery) payload.balanceQuery = balanceQuery
-    // 两个凭证字段互斥（后端也这么归一）：勾了无需鉴权就不带 apiKey 上去
+    // 两个凭证字段互斥（后端也这么归一）：勾了无需鉴权就不带 apiKey 上去；
+    // 多把 Key 时**首把随提供商一起建**（create 一步建成「提供商 + 首个账号」），
+    // 其余逐把补建（见下）
     if (noAuth) payload.noAuth = true
-    else if (apiKey) payload.apiKey = apiKey
+    else if (keys[0]) payload.apiKey = keys[0]
     context.setHint('')
     try {
       const data = (await shared().wbProviders?.customRequest?.(
         'POST', '/api/custom-providers', payload,
-      )) as { provider?: { name?: string } } | null
+      )) as { provider?: { id?: string; name?: string } } | null
+      const providerId = String(data?.provider?.id || '')
+      const created = data?.provider?.name || name
+      // 其余 Key 逐把补建账号。后端一次请求只建一个账号，这里**串行**补建：
+      // 数量个位数不值得并发，串行也让失败计数清楚（失败不整体回滚 —— 提供商与
+      // 首把已建好，丢掉后面一条不该连前面的成果一起烧掉）。
+      let failed = 0
+      if (!noAuth && keys.length > 1 && providerId) {
+        for (const key of keys.slice(1)) {
+          const account: Record<string, unknown> = { provider: providerId, apiKey: key }
+          if (balanceQuery) account.balanceQuery = balanceQuery
+          try {
+            await shared().wbProviders?.customRequest?.('POST', '/api/accounts', account)
+          } catch {
+            failed += 1
+          }
+        }
+      }
       clearFields([NAME_ID, BASEURL_ID, APIKEY_ID])
       clearBalanceFields(scheme, BALANCE_CREATE_PREFIX)
       // 勾选框与草稿一起复位（下次进来是干净的默认态，不被上一家预勾影响）
       writeNoAuthDraft(NOAUTH_ID, false)
-      const created = data?.provider?.name || name
-      await afterCustomAdd(t('✅ 已创建自定义提供商「{name}」并添加账号', { name: created }))
+      // 多把 Key 才走汇总文案；单把（含无需鉴权 / 留空）保持既有键与文案不变
+      if (keys.length > 1 && !noAuth) {
+        const added = 1 + (keys.length - 1 - failed)
+        await afterCustomAdd(t('✅ 已创建「{name}」：添加 {n} 把 Key{tail}', {
+          name: created, n: added, tail: keySummaryTail(duplicates, failed),
+        }))
+      } else {
+        await afterCustomAdd(t('✅ 已创建自定义提供商「{name}」并添加账号', { name: created }))
+      }
     } catch (error) {
       showSubmitError(context, error)
     }
@@ -587,19 +674,46 @@ async function submitCreate(context: FootContext): Promise<void> {
 async function submitExisting(context: FootContext): Promise<void> {
   const providerId = readField(EXISTING_SELECT_ID)
   if (!providerId) { toast(t('请先选择一个自定义提供商'), 'err'); return }
-  const apiKey = readField(EXISTING_APIKEY_ID)
+  const rawKeys = readField(EXISTING_APIKEY_ID)
   const noAuth = readNoAuthDraft(EXISTING_NOAUTH_ID)
   const name = readField(EXISTING_NAME_ID)
   // 余额查询方案在这一家身上（提供商记录）：要不要渲染查询凭证那段由它决定，
   // 提交时也就按它读（同一个来源，不会出现「界面上有框、提交时读错方案」）
   const scheme = String(customList().find(item => item.id === providerId)?.balanceScheme || '')
+  // 一行一把 Key（去重口径同新建模式）：单行输入 ⇒ keys.length === 1 ⇒ 与改造前一致
+  const { keys, duplicates } = parseApiKeys(rawKeys)
   await runSubmit(context.setBusy, async () => {
+    const balanceQuery = readBalanceQuery(scheme, BALANCE_EXISTING_PREFIX)
+    // 多把 Key：逐把 POST（同一把 = 同一条账号，后端按 key 摘要合并/更新）。备注名
+    // 逐条沿用用户填的那个（名字不唯一是允许的，尾号仍能把它们区分开）。
+    if (!noAuth && keys.length > 1) {
+      context.setHint('')
+      let failed = 0
+      for (const key of keys) {
+        const account: Record<string, unknown> = { provider: providerId, apiKey: key }
+        if (name) account.name = name
+        if (balanceQuery) account.balanceQuery = balanceQuery
+        try {
+          await shared().wbProviders?.customRequest?.('POST', '/api/accounts', account)
+        } catch {
+          failed += 1
+        }
+      }
+      clearFields([EXISTING_APIKEY_ID, EXISTING_NAME_ID])
+      clearBalanceFields(scheme, BALANCE_EXISTING_PREFIX)
+      writeNoAuthDraft(EXISTING_NOAUTH_ID, false)
+      const label = customList().find(item => item.id === providerId)?.name || ''
+      await afterCustomAdd(t('✅ {label}：已添加 {n} 把 Key{tail}', {
+        label, n: keys.length - failed, tail: keySummaryTail(duplicates, failed),
+      }))
+      return
+    }
+    // 单把 / 无需鉴权 / 留空：与改造前逐字相同的单请求路径
     const payload: Record<string, unknown> = { provider: providerId }
     // 与新建模式同一口径：勾了无需鉴权就不带 apiKey
     if (noAuth) payload.noAuth = true
-    else if (apiKey) payload.apiKey = apiKey
+    else if (keys[0]) payload.apiKey = keys[0]
     if (name) payload.name = name
-    const balanceQuery = readBalanceQuery(scheme, BALANCE_EXISTING_PREFIX)
     if (balanceQuery) payload.balanceQuery = balanceQuery
     context.setHint('')
     try {
