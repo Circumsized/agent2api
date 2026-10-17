@@ -1175,12 +1175,28 @@ async fn fetch_opencode_zen_catalog() -> Option<Map<String, Value>> {
         .cloned()
 }
 
+/// 目录里 `provider.npm` 指向上游用的 SDK：参考实现按它判「这一档能不能走对话协议」
+/// （`@ai-sdk/openai` → chat/responses，`@ai-sdk/anthropic` → messages），其余 SDK
+/// 的档**直接跳过**（`buildModels` 里那个 `continue`）。
+///
+/// 这里只作**补充判据**，两个刻意取舍：
+///   · 目录没写 npm → `None`，即**不判**（查不到不等于不可用，不能因此剔掉）；
+///   · 写了但既非 openai 族也非 anthropic 族 → `Some(false)`，剔掉。
+/// 注意它**挡不住** SystemOne 那一档（`jev-*` 根本不在目录里，参考实现要靠 docs
+/// 协议表才认得出来）—— 真正挡住它的是上面那份快照名单 [`OPENCODE_ZEN_NON_CHAT_IDS`]。
+fn npm_is_conversational(model: &Value) -> Option<bool> {
+    let npm = model.get("provider")?.get("npm")?.as_str()?;
+    let npm = npm.to_ascii_lowercase();
+    Some(npm.contains("openai") || npm.contains("anthropic"))
+}
+
 /// 一个 id 是不是「OpenCode Zen 免费档现在可聊天的模型」。
 ///
-/// 判据三条（与 magpie `isFree` 对齐，外加一条本项目自己的排除）：
+/// 判据四条（与 magpie `isFree` / `buildModels` 对齐，外加一条本项目自己的排除）：
 ///   1. 不在 [`OPENCODE_ZEN_NON_CHAT_IDS`] 里（SystemOne 决策模型，不能聊）；
-///   2. 目录里若说它退役（[`model_is_retired`]）则否；
-///   3. 免费 = id 含 `free`（不区分大小写）**或** [`OPENCODE_ZEN_FREE_ALLOWLIST`]
+///   2. 目录的 `provider.npm` 若明说它不是对话族 SDK（[`npm_is_conversational`]）则否；
+///   3. 目录里若说它退役（[`model_is_retired`]）则否；
+///   4. 免费 = id 含 `free`（不区分大小写）**或** [`OPENCODE_ZEN_FREE_ALLOWLIST`]
 ///      命中 **或** 目录 cost 的 input 与 output 都是 0 —— 后两条是 `big-pickle`
 ///      这类「无 `-free` 后缀的免费模型」被留下的依据。白名单那一条不看目录，
 ///      所以目录取不到时它照样留得住。
@@ -1194,6 +1210,10 @@ fn is_opencode_zen_free(id: &str, catalog: Option<&Map<String, Value>>) -> bool 
     let entry = catalog
         .and_then(|models| models.get(id))
         .filter(|value| value.is_object());
+    // 目录明写了「非对话族 SDK」→ 免费也不广告（放在下面两条之前，免得它先被判成可聊）
+    if entry.and_then(npm_is_conversational) == Some(false) {
+        return false;
+    }
     if entry.is_some_and(model_is_retired) {
         return false;
     }
@@ -1730,6 +1750,10 @@ mod tests {
             // 付费：cost 非 0
             "claude-opus-5": { "cost": { "input": 5, "output": 25 } },
             "gpt-5.5": { "cost": { "input": 1.25, "output": 10 } },
+            // 免费，但目录明写用了**非对话族** SDK → 不能广告成可聊
+            "gemini-x-free": { "cost": { "input": 0, "output": 0 }, "provider": { "npm": "@ai-sdk/google" } },
+            // 免费，目录明写是对话族 SDK → 照留
+            "kimi-x-free": { "cost": { "input": 0, "output": 0 }, "provider": { "npm": "@ai-sdk/openai" } },
         })
         .as_object()
         .cloned()
@@ -1772,6 +1796,26 @@ mod tests {
         assert!(!is_opencode_zen_free("test", None));
         // SystemOne 的排除不受目录有无影响
         assert!(!is_opencode_zen_free("jev-1.13-free", None));
+    }
+
+    /// 目录里 `provider.npm` 这一层的用法：明写**非对话族** SDK 的一档不广告（就算
+    /// 它免费），明写对话族 SDK 的照留，而**目录里没有这一条**的一档不受影响
+    /// —— 后一条是刻意留的余地：查不到不等于不可用。
+    #[test]
+    fn zen_free_uses_the_catalog_sdk_family_to_skip_non_conversational_entries() {
+        let catalog = zen_catalog();
+        assert!(
+            !is_opencode_zen_free("gemini-x-free", Some(&catalog)),
+            "目录写的是 @ai-sdk/google（非对话族）→ 免费也不广告"
+        );
+        assert!(
+            is_opencode_zen_free("kimi-x-free", Some(&catalog)),
+            "目录写的是 @ai-sdk/openai（对话族）→ 照留"
+        );
+        assert!(
+            is_opencode_zen_free("brand-new-free", Some(&catalog)),
+            "目录里没有这一条 → 这一层不判，仍由 -free 那条判据说了算"
+        );
     }
 
     #[test]
