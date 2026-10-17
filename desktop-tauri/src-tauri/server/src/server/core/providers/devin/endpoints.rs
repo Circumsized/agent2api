@@ -105,6 +105,7 @@ mod tests {
 
     #[test]
     fn os_name_is_one_of_the_three_known_words() {
-        assert!(["windows", "linux", "macos"].contains(&os_name()));
+        // 参考实现报的是 Node 的 `process.platform`（macOS 上是 `darwin`，不是 `macos`）
+        assert!(["windows", "linux", "darwin"].contains(&os_name()));
     }
 }

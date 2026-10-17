@@ -879,15 +879,22 @@ pub async fn add_account(state: &ServerState, body: &Bytes) -> Response {
         // → **只读导入本机 devin CLI 的 `credentials.toml`**（登录态在 CLI 自己那份
         // 文件里，读不到就 400 —— 与 OrcaTerm 同一「读桌面端登录态」的口径）。
         //
-        // **不调上游**（与 CodeArts / OfficeAce 同口径）：凭据是登录 / 导入换来的，
-        // 添加时没有可交换的授权码。浏览器 PKCE 登录是另一条链路（适配器的
-        // `supports_web_login` 走 `/api/session/login/start` → 回调 →
-        // `core::login` 的 Devin 分支 → 同一个落账号入口 `add_devin_account`）。
+        // **手工粘贴不调上游**（与 CodeArts / OfficeAce 同口径）：凭据是登录 / 导入
+        // 换来的，添加时没有可交换的授权码。
+        //
+        // `importDesktop` 那条是**例外**：前端已对用户承诺「导入时会向 Devin 验一次
+        // 身份并补上账号邮箱」，参考实现（magpie 的 `cliSignIn`）也验，所以这里走
+        // `verified_cli_credential`（async，只被上游拒绝才失败）—— 好处是邮箱补全 +
+        // 当场发现作废的令牌，代价是导入时多一次 `GetUserStatus`。
+        //
+        // 浏览器 PKCE 登录是另一条链路（适配器的 `supports_web_login` 走
+        // `/api/session/login/start` → 回调 → `core::login` 的 Devin 分支 → 同一个
+        // 落账号入口 `add_devin_account`）。
         Some(crate::server::core::providers::ProviderKind::Devin) => {
             if import_desktop {
-                match crate::server::core::login::devin::cli_credential() {
+                match crate::server::core::login::devin::verified_cli_credential().await {
                     Ok(credential) => store.add_devin_account(&credential, import_name, "desktop"),
-                    Err(reason) => return management_error(400, reason),
+                    Err(error) => return management_error(error.status_code, &error.message),
                 }
             } else {
                 match crate::server::core::providers::devin::credentials::Credential::from_payload(

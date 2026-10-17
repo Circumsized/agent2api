@@ -10,21 +10,38 @@
 //!     `windsurf_api_key` 后落账号。这条路径不碰 CLI 自己的数据（不写、不改），只是
 //!     把它已经登录的那枚令牌搬进网关。
 //!
-//! ── 导入**不调上游**（一个明确的取舍，而不是漏掉的一步）─────────
-//! 参考实现（magpie 的 devin 插件）在 CLI 导入时会顺手 `GetUserStatus` 验一次身份，
-//! 好处是能补上邮箱、并**当场**发现「这枚令牌已经作废」。本仓**没有**跟这一步：
-//! 与 CodeArts / OfficeAce 同口径 —— 「添加账号」不调上游（见 `api::accounts` 里
-//! Devin 分支的说明），凭据是登录 / 导入换来的，添加时没有可交换的授权码。
-//! 代价是：导入一枚已失效的令牌会落成一条「一用就 401」的账号，要用户自己在首次
-//! 调用失败后重新登录。要改口径，就把 `oauth::who_by_key` 的验身份接进下面这条
-//! 入口（它已经写好，是刻意不接的）。
+//! ── 导入会验一次身份（本仓「添加账号不调上游」的一个明确例外）─────
+//! 全仓的口径是「添加账号不调上游」（凭据是登录 / 导入换来的，没有可交换的授权码，
+//! 见 CodeArts / OfficeAce）。本文件这条**例外**：前端「添加账号」页已经对用户承诺
+//! 了「导入时会向 Devin 验一次身份并补上账号邮箱」（`ui-islands` 的 `DEVIN.desktopNote`
+//! 与 i18n 的对应条目），参考实现（magpie 的 devin 插件 `cliSignIn`）也是这么做的。
+//! 验身份的收益有两个：把账号邮箱补上（去重与展示都更好），以及**当场**发现「本机这
+//! 枚令牌已经作废」—— 否则用户会得到一条一用就 401 的账号，而错误要等到第一次真正
+//! 转发时才暴露。
+//!
+//! 尺度上有意收了一手：**只有上游明确拒绝（401）才算失败**。「认不出身份」
+//! （`Identity::Unknown`，含网络不通 / 上游抖动）照常导入，只是不补邮箱 —— 不然
+//! 一次网络抖动就会让「导入本机登录态」这个纯本地动作彻底不可用。
 
-use crate::server::core::providers::devin::credentials;
+use crate::server::core::providers::devin::{credentials, oauth};
+use crate::server::errors::GatewayError;
 
-/// 只读读出本机 CLI 的登录态，交出凭证（供「添加账号」的导入入口直接取用，
-/// 从而与手动粘贴共用同一条落账号路径）。
+/// 只读读出本机 CLI 的登录态并**验一次身份**，交出凭证（供「添加账号」的导入入口
+/// 直接取用，从而与手动粘贴共用同一条落账号路径）。
 ///
-/// **不验身份**：理由见模块头「导入不调上游」那一段。
-pub fn cli_credential() -> Result<credentials::Credential, String> {
-    credentials::read_cli_credentials()
+/// 失败语义见模块头：被上游拒绝 → 401；读不到文件 / TOML 解不出 → 400。
+pub async fn verified_cli_credential() -> Result<credentials::Credential, GatewayError> {
+    let mut credential = credentials::read_cli_credentials()
+        .map_err(|reason| GatewayError::with_status(400, reason))?;
+    match oauth::who_by_key(&credential.token, &credential.server()).await {
+        oauth::Identity::Refused => Err(GatewayError::with_status(
+            401,
+            "本机 devin CLI 的登录态已被 Devin 拒绝：请重新运行 `devin auth login` 后再导入",
+        )),
+        oauth::Identity::Known(email) => {
+            credential.email = email;
+            Ok(credential)
+        }
+        oauth::Identity::Unknown => Ok(credential),
+    }
 }
